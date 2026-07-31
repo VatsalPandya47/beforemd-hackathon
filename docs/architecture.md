@@ -56,3 +56,7 @@ CONSENT -> LOAD_HISTORY -> OPENING_QUESTION -> IDENTIFY_GAP -> ASK_ADAPTIVE_QUES
 ```
 
 Safety implementation: a hard-coded red-flag checklist (breathing difficulty, facial or mouth swelling, fever, mucosal sores, blistering, rapid spread, severe pain) runs deterministically — the LLM never decides whether a flag can be ignored. Any active flag halts intake and shows the escalation message (`src/lib/agent/safety.ts`).
+
+## Related tooling
+
+[yc-software/qm](https://github.com/yc-software/qm) — a multiplayer agent harness (Slack + web, per-scope sandboxes, shared skills, harness-agnostic core). Not part of this stack, but worth a look if the agent orchestration work (Chiradeep) wants reference patterns for tool-scoped state, provenance/audit trails, or running the same agent core across multiple surfaces.
