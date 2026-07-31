@@ -16,7 +16,7 @@ import type { AgentEvent, AgentState, AgentTurnResult, ClinicalDraft } from "@/t
 // nextQuestionForGap once LLM_API_KEY is available; until then this returns
 // scripted copy matching the doc's demo conversation.
 
-const STATE_ORDER: AgentState[] = [
+export const STATE_ORDER: AgentState[] = [
   "CONSENT",
   "LOAD_HISTORY",
   "OPENING_QUESTION",

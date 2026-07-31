@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { runAgentTurn } from "@/lib/agent/orchestrator";
+import { runAgentTurn, STATE_ORDER } from "@/lib/agent/orchestrator";
 import { demoClinicalDraft } from "@/lib/demo-fixtures";
 import type { AgentState, ClinicalDraft } from "@/types";
 
@@ -68,7 +68,9 @@ export async function POST(request: NextRequest) {
     sequence_no: sequenceNo++,
   });
 
-  const currentState = (session.status as AgentState) ?? "CONSENT";
+  const currentState: AgentState = STATE_ORDER.includes(session.status as AgentState)
+    ? (session.status as AgentState)
+    : "CONSENT";
   const result = await runAgentTurn(
     sessionId,
     session.patient_fhir_id,
