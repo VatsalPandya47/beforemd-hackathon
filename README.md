@@ -1,36 +1,70 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# BeforeMD
 
-## Getting Started
+Voice-first pre-visit intelligence that prepares the patient, the chart, and the clinician before the appointment.
 
-First, run the development server:
+Built for the YC × Medplum Agentic Healthcare Hackathon (August 1, 2026).
+
+> Synthetic demo data only. BeforeMD does not diagnose, prescribe, or represent that a clinician has approved any output — see [`docs/architecture.md`](docs/architecture.md) for safety boundaries.
+
+## Team
+
+| Owner | Scope | Branch |
+| --- | --- | --- |
+| Vatsal | Product, pitch, sponsor relations, demo fixtures | `feat/demo-pitch` |
+| Kashish | FHIR and Medplum | `feat/medplum-fhir` |
+| Chiradeep | Agent orchestration and integrations | `feat/agent-integrations` |
+| Thang | Frontend, voice UX, visualization | `feat/voice-ui` |
+
+`main` is always deployable — merge only tested vertical slices.
+
+## Stack
+
+Next.js (App Router, TypeScript) · Tailwind + shadcn/ui · Supabase (Postgres, Realtime, Storage) · Medplum (FHIR source of truth) · Deepgram (voice) · Moss (context retrieval) · Stedi (eligibility) · Vercel (deploy)
+
+Architecture boundary: **Medplum is the clinical source of truth. Supabase only stores IDs, session state, transcripts, generated artifacts, and cached sponsor responses** — never the full FHIR record. Details in [`docs/architecture.md`](docs/architecture.md).
+
+## Getting started
 
 ```bash
+npm install
+cp .env.example .env.local   # fill in Supabase/Medplum/Deepgram/Moss/Stedi keys
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Every sponsor integration is behind a feature flag (`USE_LIVE_*` in `.env.local`) with a fixture fallback, so the app runs end-to-end even before all credentials are wired up (`ALLOW_FIXTURE_FALLBACK=true`).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Supabase schema lives in `supabase/migrations/001_initial.sql`. Apply it with:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+supabase link --project-ref <your-project-ref>
+supabase db push
+```
 
-## Learn More
+## Repository structure
 
-To learn more about Next.js, take a look at the following resources:
+```
+docs/                   architecture, demo script, sponsor notes, fixture IDs
+supabase/migrations/     schema for demo_sessions, transcript_events, agent_events, clinical_drafts, integration_cache
+public/demo/             backup avatar + audio for replay-mode fallback (see public/demo/README.md)
+src/app/                 clinician dashboard, intake/[sessionId], clinician/[sessionId], patient/[sessionId], api routes
+src/components/          voice-orb, live-transcript, agent-activity, clinical-timeline, clinician-brief, source-evidence, coverage-card
+src/lib/agent/           orchestrator (state machine), prompts, Zod schemas, safety checklist
+src/lib/integrations/    medplum.ts, deepgram.ts, moss.ts, stedi.ts adapters — all return the shared ToolResult<T> shape
+src/lib/supabase/        browser/server/admin Supabase clients
+src/types/                shared domain types
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Commands
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+npm run dev      # local dev server
+npm run build    # production build
+npm run lint     # eslint
+```
 
-## Deploy on Vercel
+## Docs
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- [`docs/architecture.md`](docs/architecture.md) — stack, data flow, hackathon-safe architecture decisions
+- [`docs/demo-script.md`](docs/demo-script.md) — synthetic patient story and screen-by-screen demo flow
+- [`docs/demo-fixtures.md`](docs/demo-fixtures.md) — Medplum FHIR resource IDs for the synthetic patient (fill in once seeded)
+- [`docs/sponsor-notes.md`](docs/sponsor-notes.md) — sponsor account setup, adapter fallback ladder, judge-specific talking points
