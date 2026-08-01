@@ -29,7 +29,15 @@ export const demoPatientContext: PatientContext = {
       onsetDate: "2026-07-07",
     },
   ],
-  allergies: [],
+  // Deliberately environmental, not a drug allergy — a drug allergy already on
+  // the chart would make the agent's medication-timing discovery look pre-known.
+  allergies: [
+    {
+      fhirId: "DEMO_ALLERGY_POLLEN",
+      substance: "Pollen (seasonal)",
+      reaction: "Seasonal rhinitis, no rash",
+    },
+  ],
   priorDocuments: [
     {
       fhirId: "DEMO_DOCUMENT_PRIOR_NOTE",
