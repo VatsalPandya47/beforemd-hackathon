@@ -6,6 +6,13 @@ import { initialSafetyFlags } from "@/lib/agent/safety";
 import { demoClinicalDraft } from "@/lib/demo-fixtures";
 import type { AgentState, ClinicalDraft, TranscriptEvent } from "@/types";
 
+// RETRIEVE_SUPPORTING_CONTEXT's cold path alone budgets up to 20s (Moss's own
+// LOAD_TIMEOUT_MS 15s + QUERY_TIMEOUT_MS 5s), on top of whatever LLM and
+// Medplum/Stedi calls a turn also makes. Explicit rather than left to the
+// platform default so a slow cold start fails as a clean timeout rather than
+// however the default happens to be configured.
+export const maxDuration = 60;
+
 const AgentTurnSchema = z
   .object({
     sessionId: z.string().uuid(),

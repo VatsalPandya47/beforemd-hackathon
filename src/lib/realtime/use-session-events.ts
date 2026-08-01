@@ -21,6 +21,17 @@ import type { AgentEvent, AgentEventType, TranscriptEvent, TranscriptSpeaker } f
 
 export type SessionSyncStatus = "connecting" | "live" | "error";
 
+/**
+ * A transcript line as the screen holds it, with one client-only marker.
+ *
+ * `adopted` means this committed row replaced a line the screen was already
+ * showing optimistically. Without it, a committed row that arrived on its own is
+ * indistinguishable from one that replaced an optimistic entry — both simply
+ * carry a positive id — and the two merges below need to tell them apart to stay
+ * correct in both arrival orders.
+ */
+export type DisplayTranscriptEvent = TranscriptEvent & { adopted?: boolean };
+
 // NEXT_PUBLIC_* values are inlined at build time, so this is a build-time
 // constant. Checked rather than assumed because nothing used the browser client
 // before this hook: an environment that only ever needed the server key would
@@ -101,19 +112,69 @@ function toAgentEvent(row: AgentRow): AgentEvent {
  * moves on to the second.
  */
 export function mergeTranscriptEvent(
-  events: TranscriptEvent[],
+  events: DisplayTranscriptEvent[],
   incoming: TranscriptEvent
-): TranscriptEvent[] {
+): DisplayTranscriptEvent[] {
   if (events.some((event) => event.id === incoming.id)) return events;
 
   const pending = events.findIndex(
     (event) =>
       event.id < 0 && event.speaker === incoming.speaker && event.text === incoming.text
   );
+  // Unclaimed: nothing on screen was waiting for this row, so it is the first
+  // time this line has been displayed. appendOptimisticEvent looks for that.
   if (pending === -1) return [...events, incoming];
 
   const next = events.slice();
-  next[pending] = incoming;
+  next[pending] = { ...incoming, adopted: true };
+  return next;
+}
+
+/**
+ * Marks a row as committed history: loaded rather than delivered, so
+ * appendOptimisticEvent may not claim it. Exported so the invariant is testable —
+ * leaving hydrated rows claimable silently swallowed a repeated line, and the
+ * only thing keeping that from returning is `hydrate()` calling this.
+ */
+export function markAsHistory(event: TranscriptEvent): DisplayTranscriptEvent {
+  return { ...event, adopted: true };
+}
+
+/**
+ * Appends a line the screen is showing before its row is committed — unless that
+ * row has already arrived.
+ *
+ * Realtime and the fetch response race, and the fetch does not always win:
+ * `api/agent/turn` inserts the patient's line and the agent's reply *before* it
+ * responds, and then does more work (the draft upsert) before returning, so
+ * against a hosted Supabase the committed row routinely lands first. Appending
+ * blindly then shows the same line twice — the doubled agent greeting.
+ *
+ * When an unclaimed committed row is already present, this consumes it — marking
+ * it adopted — instead of appending. Consuming rather than merely skipping is
+ * what keeps a repeated utterance honest: answer "Yes" twice and the second
+ * optimistic append finds the first row already adopted, so it appends its own
+ * line and waits for its own row.
+ *
+ * Claimable means delivered by Realtime since this screen mounted. Rows loaded by
+ * hydration are marked adopted on arrival, because they are committed history
+ * rather than a row racing an append that is still in flight — see `hydrate()`.
+ */
+export function appendOptimisticEvent(
+  events: DisplayTranscriptEvent[],
+  entry: DisplayTranscriptEvent
+): DisplayTranscriptEvent[] {
+  const committed = events.findIndex(
+    (event) =>
+      event.id > 0 &&
+      !event.adopted &&
+      event.speaker === entry.speaker &&
+      event.text === entry.text
+  );
+  if (committed === -1) return [...events, entry];
+
+  const next = events.slice();
+  next[committed] = { ...next[committed], adopted: true };
   return next;
 }
 
@@ -123,6 +184,14 @@ export function mergeTranscriptEvent(
  * events it returns — so the id check does the work. The fallback matters only
  * when that insert returned an unexpected row count and the ids stayed 0, which
  * the route treats as non-fatal.
+ *
+ * Known residual, reported in review of #48: in that `id: 0` fallback, with
+ * Realtime arriving first, the real row is appended and then the response's
+ * id-less copy appends beside it. The consume trick used for the transcript is the
+ * wrong tool here — a rail title legitimately repeats every turn ("Reviewing
+ * medication history" fires on each one), so consuming by title would swallow real
+ * events to prevent a duplicate that needs an insert row-count mismatch the route
+ * already treats as non-fatal.
  */
 export function mergeAgentEvent(events: AgentEvent[], incoming: AgentEvent): AgentEvent[] {
   if (events.some((event) => event.id === incoming.id)) return events;
@@ -149,7 +218,7 @@ export function useSessionEvents({
 }: {
   sessionId: string;
   /** Everything already committed for this session, in insertion order. */
-  onHydrate: (rows: { transcript: TranscriptEvent[]; agentEvents: AgentEvent[] }) => void;
+  onHydrate: (rows: { transcript: DisplayTranscriptEvent[]; agentEvents: AgentEvent[] }) => void;
   onTranscript: (event: TranscriptEvent) => void;
   onAgentEvent: (event: AgentEvent) => void;
 }): SessionSync {
@@ -204,7 +273,19 @@ export function useSessionEvents({
       }
 
       handlers.current.onHydrate({
-        transcript: (transcript.data ?? []).map((row) => toTranscriptEvent(row as TranscriptRow)),
+        // Marked as history, not left claimable: a later utterance matching a
+        // historical line would otherwise consume that old row instead of
+        // appending itself, and the new line would silently never appear — worse
+        // on a demo screen than a visible duplicate, and "yes" / "okay" repeat
+        // constantly in an intake. Reported in review of #48.
+        //
+        // The narrow cost: a turn submitted in the window before SUBSCRIBED, whose
+        // row lands before this read, is loaded as history and then the response
+        // appends its own copy — one duplicated line. That needs a submit in the
+        // first moment after mount; the swallowed line needed only a reload.
+        transcript: (transcript.data ?? []).map((row) =>
+          markAsHistory(toTranscriptEvent(row as TranscriptRow))
+        ),
         agentEvents: (agentEvents.data ?? []).map((row) => toAgentEvent(row as AgentRow)),
       });
     }

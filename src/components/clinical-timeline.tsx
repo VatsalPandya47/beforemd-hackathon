@@ -184,18 +184,20 @@ export function ClinicalTimeline({
 
               {carriesGapBadge && (
                 <span
-                  className="bmd-timeline-pop absolute -top-7 left-0 inline-flex items-center rounded-full border border-blue-200 bg-white px-2.5 py-1 text-xs font-semibold text-blue-700 shadow-sm"
+                  className="bmd-timeline-pop absolute -top-8 left-0 inline-flex items-center rounded-full border border-blue-200 bg-white px-3 py-1 text-sm font-semibold text-blue-800 shadow-sm"
                   style={{ animationDelay: `${badgeDelay}ms` }}
                 >
                   {dayGap} days later
                 </span>
               )}
 
-              <p className="text-xs font-medium text-slate-400">{entry.date}</p>
+              <p className="text-sm font-medium text-slate-500">{entry.date}</p>
               <p
                 className={cn(
-                  "text-sm font-medium text-slate-900",
-                  isLinked && "text-base font-semibold text-blue-950"
+                  // One step up across the board: the timeline is the centrepiece
+                  // of the reveal and gets read from the back of the room.
+                  "text-base font-medium text-slate-900",
+                  isLinked && "text-lg font-semibold text-blue-950"
                 )}
               >
                 {entry.label}
@@ -219,11 +221,13 @@ export function ClinicalTimeline({
           style={{ animationDelay: `${insightDelay}ms` }}
         >
           <CardHeader>
-            <CardTitle className="text-base text-blue-900">Key insight — for clinician review</CardTitle>
+            <CardTitle className="text-lg text-blue-900">Key insight — for clinician review</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-2">
-            <p className="text-sm text-blue-950">{keyConnection.statement}</p>
-            <p className="text-xs font-medium uppercase text-blue-700">
+            {/* The demo's whole reveal is this sentence, so it is the largest
+                body text on the screen. */}
+            <p className="text-lg leading-relaxed text-blue-950">{keyConnection.statement}</p>
+            <p className="text-sm font-medium tracking-wide text-blue-700 uppercase">
               Confidence: {keyConnection.confidence}
             </p>
           </CardContent>
