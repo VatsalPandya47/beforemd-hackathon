@@ -12,6 +12,7 @@ export function ClinicianBrief({
   writeBack = null,
   approveError = null,
   isApproving = false,
+  approveBlockedReason = null,
 }: {
   draft: ClinicalDraft;
   onApprove?: () => void;
@@ -19,6 +20,13 @@ export function ClinicianBrief({
   writeBack?: ApproveResponse | null;
   approveError?: string | null;
   isApproving?: boolean;
+  /**
+   * Set when this draft must not be written to a chart, with the reason shown
+   * next to the disabled button. Used when the brief on screen is not this
+   * session's saved draft — approving then writes something other than what the
+   * clinician is looking at.
+   */
+  approveBlockedReason?: string | null;
 }) {
   return (
     <div className="flex flex-col gap-6">
@@ -59,11 +67,13 @@ export function ClinicianBrief({
 
       <div className="flex items-center justify-between gap-4">
         <p className="text-xs text-muted-foreground">
-          Draft is unverified until a clinician approves it.
+          {approveBlockedReason ?? "Draft is unverified until a clinician approves it."}
         </p>
         <Button
           onClick={onApprove}
-          disabled={isApproving || draft.clinicianStatus === "approved"}
+          disabled={
+            isApproving || draft.clinicianStatus === "approved" || Boolean(approveBlockedReason)
+          }
         >
           {draft.clinicianStatus === "approved"
             ? "Approved"
