@@ -86,17 +86,32 @@ export async function POST(request: NextRequest) {
     sequence_no: sequenceNo++,
   });
 
-  if (result.toolEvents.length > 0) {
-    await supabase.from("agent_events").insert(
-      result.toolEvents.map((event) => ({
-        session_id: sessionId,
-        event_type: event.eventType,
-        tool_name: event.toolName,
-        title: event.title,
-        payload: event.payload,
-        sequence_no: sequenceNo++,
-      }))
-    );
+  // runAgentTurn cannot know database ids, so it emits every event with id 0.
+  // Read the assigned ids back rather than returning the placeholders — the
+  // activity rail and replay both identify events by id.
+  let toolEvents = result.toolEvents;
+  if (toolEvents.length > 0) {
+    const { data: inserted } = await supabase
+      .from("agent_events")
+      .insert(
+        toolEvents.map((event) => ({
+          session_id: sessionId,
+          event_type: event.eventType,
+          tool_name: event.toolName,
+          title: event.title,
+          payload: event.payload,
+          sequence_no: sequenceNo++,
+        }))
+      )
+      .select("id, sequence_no");
+
+    if (inserted?.length === toolEvents.length) {
+      toolEvents = toolEvents.map((event, index) => ({
+        ...event,
+        id: inserted[index].id,
+        sequenceNo: inserted[index].sequence_no,
+      }));
+    }
   }
 
   await supabase
@@ -124,6 +139,6 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({
     reply: result.reply,
     nextState: result.nextState,
-    toolEvents: result.toolEvents,
+    toolEvents,
   });
 }
