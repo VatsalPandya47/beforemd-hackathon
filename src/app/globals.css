@@ -7,9 +7,13 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-sans);
+  /* These must point at the next/font variables declared in app/layout.tsx
+     (--font-geist-sans / --font-geist-mono). Referencing --font-sans from
+     within its own definition resolves to nothing, which silently drops the
+     whole app to the browser's default serif. */
+  --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-  --font-heading: var(--font-sans);
+  --font-heading: var(--font-geist-sans);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -126,5 +130,83 @@
   }
   html {
     @apply font-sans;
+  }
+}
+
+/* Clinical timeline reveal — see src/components/clinical-timeline.tsx.
+   Motion is scoped to the timeline reveal per doc section 8 (the other two
+   sanctioned motions are voice state and live tool progress). Every animation
+   uses fill-mode `both` so the pre-delay state is held and the post-animation
+   state persists — the timeline must never end up half-drawn on stage. */
+
+@keyframes bmd-timeline-entry {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes bmd-timeline-draw {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes bmd-timeline-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes bmd-timeline-pulse {
+  from {
+    opacity: 0.5;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(2.4);
+  }
+}
+
+.bmd-timeline-entry {
+  animation: bmd-timeline-entry 500ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.bmd-timeline-draw {
+  transform-origin: top center;
+  animation: bmd-timeline-draw 800ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+.bmd-timeline-pop {
+  animation: bmd-timeline-pop 400ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.bmd-timeline-pulse {
+  animation: bmd-timeline-pulse 1.4s ease-out 2 both;
+}
+
+/* Collapse the choreography rather than dropping it: the final composition
+   (connector drawn, badge shown, insight visible) still renders. */
+@media (prefers-reduced-motion: reduce) {
+  .bmd-timeline-entry,
+  .bmd-timeline-draw,
+  .bmd-timeline-pop,
+  .bmd-timeline-pulse {
+    animation-duration: 1ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
   }
 }
