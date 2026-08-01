@@ -21,6 +21,17 @@ import type { AgentEvent, AgentEventType, TranscriptEvent, TranscriptSpeaker } f
 
 export type SessionSyncStatus = "connecting" | "live" | "error";
 
+/**
+ * A transcript line as the screen holds it, with one client-only marker.
+ *
+ * `adopted` means this committed row replaced a line the screen was already
+ * showing optimistically. Without it, a committed row that arrived on its own is
+ * indistinguishable from one that replaced an optimistic entry — both simply
+ * carry a positive id — and the two merges below need to tell them apart to stay
+ * correct in both arrival orders.
+ */
+export type DisplayTranscriptEvent = TranscriptEvent & { adopted?: boolean };
+
 // NEXT_PUBLIC_* values are inlined at build time, so this is a build-time
 // constant. Checked rather than assumed because nothing used the browser client
 // before this hook: an environment that only ever needed the server key would
@@ -101,19 +112,55 @@ function toAgentEvent(row: AgentRow): AgentEvent {
  * moves on to the second.
  */
 export function mergeTranscriptEvent(
-  events: TranscriptEvent[],
+  events: DisplayTranscriptEvent[],
   incoming: TranscriptEvent
-): TranscriptEvent[] {
+): DisplayTranscriptEvent[] {
   if (events.some((event) => event.id === incoming.id)) return events;
 
   const pending = events.findIndex(
     (event) =>
       event.id < 0 && event.speaker === incoming.speaker && event.text === incoming.text
   );
+  // Unclaimed: nothing on screen was waiting for this row, so it is the first
+  // time this line has been displayed. appendOptimisticEvent looks for that.
   if (pending === -1) return [...events, incoming];
 
   const next = events.slice();
-  next[pending] = incoming;
+  next[pending] = { ...incoming, adopted: true };
+  return next;
+}
+
+/**
+ * Appends a line the screen is showing before its row is committed — unless that
+ * row has already arrived.
+ *
+ * Realtime and the fetch response race, and the fetch does not always win:
+ * `api/agent/turn` inserts the patient's line and the agent's reply *before* it
+ * responds, and then does more work (the draft upsert) before returning, so
+ * against a hosted Supabase the committed row routinely lands first. Appending
+ * blindly then shows the same line twice — the doubled agent greeting.
+ *
+ * When an unclaimed committed row is already present, this consumes it — marking
+ * it adopted — instead of appending. Consuming rather than merely skipping is
+ * what keeps a repeated utterance honest: answer "Yes" twice and the second
+ * optimistic append finds the first row already adopted, so it appends its own
+ * line and waits for its own row.
+ */
+export function appendOptimisticEvent(
+  events: DisplayTranscriptEvent[],
+  entry: DisplayTranscriptEvent
+): DisplayTranscriptEvent[] {
+  const committed = events.findIndex(
+    (event) =>
+      event.id > 0 &&
+      !event.adopted &&
+      event.speaker === entry.speaker &&
+      event.text === entry.text
+  );
+  if (committed === -1) return [...events, entry];
+
+  const next = events.slice();
+  next[committed] = { ...next[committed], adopted: true };
   return next;
 }
 
@@ -149,7 +196,7 @@ export function useSessionEvents({
 }: {
   sessionId: string;
   /** Everything already committed for this session, in insertion order. */
-  onHydrate: (rows: { transcript: TranscriptEvent[]; agentEvents: AgentEvent[] }) => void;
+  onHydrate: (rows: { transcript: DisplayTranscriptEvent[]; agentEvents: AgentEvent[] }) => void;
   onTranscript: (event: TranscriptEvent) => void;
   onAgentEvent: (event: AgentEvent) => void;
 }): SessionSync {

@@ -11,9 +11,11 @@ import { AgentActivity } from "@/components/agent-activity";
 import { useVoiceSession, type UseVoiceSession } from "@/lib/voice/use-voice-session";
 import { useReplaySession, type ReplayFrame } from "@/lib/replay/use-replay-session";
 import {
+  appendOptimisticEvent,
   mergeAgentEvent,
   mergeTranscriptEvent,
   useSessionEvents,
+  type DisplayTranscriptEvent,
 } from "@/lib/realtime/use-session-events";
 import type { AgentEvent, TranscriptEvent } from "@/types";
 
@@ -29,7 +31,7 @@ export default function IntakePage() {
   const params = useParams<{ sessionId: string }>();
   const router = useRouter();
 
-  const [transcript, setTranscript] = useState<TranscriptEvent[]>([]);
+  const [transcript, setTranscript] = useState<DisplayTranscriptEvent[]>([]);
   const [agentEvents, setAgentEvents] = useState<AgentEvent[]>([]);
   const [nextState, setNextState] = useState("CONSENT");
   const [turnPhase, setTurnPhase] = useState<"idle" | "thinking" | "speaking">("idle");
@@ -66,12 +68,11 @@ export default function IntakePage() {
       turnAbortRef.current = controller;
 
       setTurnError(null);
-      setTranscript((prev) => [
-        ...prev,
-        {
-          // Negative ids mark a line this screen has shown but not yet seen
-          // committed. Database ids are always positive, so the Realtime merge
-          // adopts this entry when its row arrives instead of duplicating it.
+      setTranscript((prev) =>
+        // Negative ids mark a line this screen has shown but not yet seen
+        // committed; database ids are always positive. Appended through the
+        // merge rather than pushed, because the committed row can arrive first.
+        appendOptimisticEvent(prev, {
           id: -(prev.length + 1),
           sessionId: params.sessionId,
           speaker: "patient",
@@ -79,8 +80,8 @@ export default function IntakePage() {
           isFinal: true,
           sequenceNo: prev.length,
           createdAt: new Date().toISOString(),
-        },
-      ]);
+        })
+      );
       setTurnPhase("thinking");
 
       try {
@@ -102,9 +103,8 @@ export default function IntakePage() {
         // caring, because replay now owns what is on it.
         if (stale()) return;
 
-        setTranscript((prev) => [
-          ...prev,
-          {
+        setTranscript((prev) =>
+          appendOptimisticEvent(prev, {
             id: -(prev.length + 1),
             sessionId: params.sessionId,
             speaker: "agent",
@@ -112,9 +112,11 @@ export default function IntakePage() {
             isFinal: true,
             sequenceNo: prev.length,
             createdAt: new Date().toISOString(),
-          },
-        ]);
-        setAgentEvents((prev) => [...prev, ...(result.toolEvents ?? [])]);
+          })
+        );
+        // Same race on the rail, and the same fix: these carry the ids the route
+        // inserted, so the merge drops any Realtime already delivered.
+        setAgentEvents((prev) => (result.toolEvents ?? []).reduce(mergeAgentEvent, prev));
         setNextState(result.nextState);
 
         setTurnPhase("speaking");
