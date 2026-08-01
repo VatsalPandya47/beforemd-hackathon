@@ -1,4 +1,10 @@
-import { checkSafetyRedFlags, ESCALATION_MESSAGE, hasActiveRedFlag } from "@/lib/agent/safety";
+import {
+  applyBlanketDenial,
+  checkSafetyRedFlags,
+  ESCALATION_MESSAGE,
+  hasActiveRedFlag,
+  isBlanketDenial,
+} from "@/lib/agent/safety";
 import { generateDraft, generateQuestion } from "@/lib/agent/llm";
 import { getPatientContext } from "@/lib/integrations/medplum";
 import { retrieve } from "@/lib/integrations/moss";
@@ -80,6 +86,17 @@ const SCRIPTED_QUESTIONS = {
     "Are you having trouble breathing, swelling of the face or mouth, fever, or sores in your mouth?",
 } as const;
 
+// LLM call budget: the AI Gateway free tier throttles after a handful of calls
+// (rolling window, not a hard cap — see issue #47), and a full run needs 5-6
+// (4 questions + the draft's retry). Until credits land, only states in this
+// set get an LLM-rephrased question — everywhere else speaks the scripted
+// line verbatim. GENERATE_DRAFT always calls the model regardless of this
+// set; the draft is the call that actually needs to land.
+//
+// Restore the full adaptive experience in one line: add "LOAD_HISTORY",
+// "IDENTIFY_GAP", and "ASK_ADAPTIVE_QUESTION" back to this set.
+const LLM_QUESTION_STATES = new Set<AgentState>(["OPENING_QUESTION"]);
+
 export async function runAgentTurn(
   sessionId: string,
   patientFhirId: string,
@@ -120,12 +137,14 @@ export async function runAgentTurn(
       emit("tool_completed", "get_patient_context", "Reviewed medication and visit history", {
         source: context.source,
       });
-      const opening = await generateQuestion({
-        intent: SCRIPTED_QUESTIONS.opening,
-        utterance,
-        patientContext: context.data ?? null,
-        transcript,
-      });
+      const opening = LLM_QUESTION_STATES.has(currentState)
+        ? await generateQuestion({
+            intent: SCRIPTED_QUESTIONS.opening,
+            utterance,
+            patientContext: context.data ?? null,
+            transcript,
+          })
+        : { text: SCRIPTED_QUESTIONS.opening, source: "fixture" as const };
       return {
         reply: opening.text,
         nextState: nextState(currentState),
@@ -153,12 +172,14 @@ export async function runAgentTurn(
           draftPatch: { safetyFlags },
         };
       }
-      const question = await generateQuestion({
-        intent: SCRIPTED_QUESTIONS[currentState],
-        utterance,
-        patientContext: await loadContext(),
-        transcript,
-      });
+      const question = LLM_QUESTION_STATES.has(currentState)
+        ? await generateQuestion({
+            intent: SCRIPTED_QUESTIONS[currentState],
+            utterance,
+            patientContext: await loadContext(),
+            transcript,
+          })
+        : { text: SCRIPTED_QUESTIONS[currentState], source: "fixture" as const };
       return {
         reply: question.text,
         nextState: nextState(currentState),
@@ -169,7 +190,31 @@ export async function runAgentTurn(
 
     case "SAFETY_SCREEN": {
       emit("tool_started", "check_safety_red_flags", "Checking for urgent warning signs");
-      const safetyFlags = checkSafetyRedFlags(utterance, draft.safetyFlags);
+      const screened = checkSafetyRedFlags(utterance, draft.safetyFlags);
+      // This state asks one compound question covering every flag, so a plain
+      // "no" here denies all of them. Only valid in this state — a "no"
+      // elsewhere is answering something else.
+      // Never let a denial blank out flags in the same breath as a reported
+      // symptom — if anything scored present, take the scan as-is.
+      const safetyFlags =
+        isBlanketDenial(utterance) && !hasActiveRedFlag(screened)
+          ? applyBlanketDenial(screened)
+          : screened;
+
+      // The escalation branch belongs here too, not only in the question
+      // states: a patient can first report a red flag when directly asked.
+      if (hasActiveRedFlag(safetyFlags)) {
+        emit("safety_flag", "check_safety_red_flags", "Urgent red flag detected", {
+          flags: safetyFlags,
+        });
+        return {
+          reply: ESCALATION_MESSAGE,
+          nextState: "SAFETY_SCREEN",
+          toolEvents,
+          draftPatch: { safetyFlags },
+        };
+      }
+
       emit("tool_completed", "check_safety_red_flags", "Checked for urgent warning signs", {
         flags: safetyFlags,
       });

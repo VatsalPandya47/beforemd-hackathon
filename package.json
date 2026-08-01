@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "seed:medplum": "node --env-file=.env.local scripts/seed-medplum.mjs"
+    "seed:medplum": "node --env-file=.env.local scripts/seed-medplum.mjs",
+    "test:safety": "node --import tsx --test src/lib/agent/safety.test.ts",
+    "test:realtime": "node --import tsx --test src/lib/realtime/use-session-events.test.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
@@ -43,6 +45,7 @@
     "prettier": "^3.9.6",
     "prettier-plugin-tailwindcss": "^0.8.1",
     "tailwindcss": "^4",
+    "tsx": "^4.23.1",
     "typescript": "^5"
   }
 }

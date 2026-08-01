@@ -61,22 +61,29 @@ export default function PatientPortalPage() {
 
   const isFixture = overview !== null && overview.source !== "live";
 
+  // Wider than the max-w-2xl this screen used when it was a single summary
+  // card — it now carries tabbed record sections. Eyebrow and heading follow
+  // the pair the other screens use, so it reads as one product.
   return (
     <main className="mx-auto flex max-w-3xl flex-col gap-6 p-8">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <p className="text-sm font-medium text-blue-700">Your health record</p>
-          <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+          <p className="text-sm font-semibold tracking-[0.12em] text-primary uppercase">
+            Your health record
+          </p>
+          <h1 className="mt-1 text-3xl font-semibold tracking-tight text-slate-900">
             {overview?.patient.name ?? "Loading…"}
           </h1>
           {overview && (
-            <p className="text-sm text-slate-500">Age {overview.patient.age}</p>
+            <p className="mt-1 text-base text-muted-foreground">
+              Age {overview.patient.age}
+            </p>
           )}
         </div>
 
         {/* The operator still needs the brief in one click on stage. */}
         <Link
-          className="text-sm font-medium text-blue-700 underline-offset-4 hover:underline"
+          className="shrink-0 text-sm font-medium text-primary underline-offset-4 hover:underline"
           href={`/clinician/${params.sessionId}`}
         >
           Clinician review →
@@ -113,7 +120,7 @@ export default function PatientPortalPage() {
         </>
       )}
 
-      <p className="text-xs text-muted-foreground">
+      <p className="text-sm text-muted-foreground">
         Synthetic demo only. No diagnosis or treatment decision has been made, and your
         clinician reviews everything here before your visit.
       </p>

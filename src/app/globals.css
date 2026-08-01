@@ -30,6 +30,10 @@
   --color-ring: var(--ring);
   --color-input: var(--input);
   --color-border: var(--border);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-success-muted: var(--success-muted);
+  --color-success-muted-foreground: var(--success-muted-foreground);
   --color-destructive: var(--destructive);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
@@ -52,25 +56,37 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/* The palette lives here rather than in per-component utility classes (doc
+   section 8: white / navy / blue, green reserved for completed steps).
+   Everything shipped so far carried its own blue-600 or slate-700 while these
+   tokens were still shadcn's default greyscale — --primary was near-black, which
+   is why every primary button rendered black on a screen meant to read clinical
+   navy. Values are the exact Tailwind oklch entries the utility classes use, so
+   tokens and any remaining utilities agree instead of drifting a shade apart. */
 :root {
   --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
+  --foreground: oklch(0.208 0.042 265.755); /* slate-900 */
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
+  --card-foreground: oklch(0.208 0.042 265.755);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.208 0.042 265.755);
+  --primary: oklch(0.379 0.146 265.522); /* blue-900, the clinical navy */
   --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.968 0.007 247.896); /* slate-100 */
+  --secondary-foreground: oklch(0.372 0.044 257.287); /* slate-700 */
+  --muted: oklch(0.968 0.007 247.896);
+  --muted-foreground: oklch(0.554 0.046 257.417); /* slate-500 */
+  --accent: oklch(0.97 0.014 254.604); /* blue-50 */
+  --accent-foreground: oklch(0.379 0.146 265.522);
   --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  --border: oklch(0.929 0.013 255.508); /* slate-200 */
+  --input: oklch(0.929 0.013 255.508);
+  --ring: oklch(0.546 0.245 262.881); /* blue-600 */
+  /* Reserved for completed steps and confirmed writes — never for emphasis. */
+  --success: oklch(0.596 0.145 163.225); /* emerald-600 */
+  --success-foreground: oklch(0.985 0 0);
+  --success-muted: oklch(0.979 0.021 166.113); /* emerald-50 */
+  --success-muted-foreground: oklch(0.432 0.095 166.913); /* emerald-800 */
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
@@ -87,7 +103,14 @@
   --sidebar-ring: oklch(0.708 0 0);
 }
 
+/* Left on shadcn's defaults: nothing toggles `.dark` and the demo runs light on
+   a projector, so restyling it would be unverifiable churn. The success tokens
+   are mirrored only so a dark surface cannot resolve them to nothing. */
 .dark {
+  --success: oklch(0.696 0.17 162.48); /* emerald-500 */
+  --success-foreground: oklch(0.208 0.042 265.755);
+  --success-muted: oklch(0.393 0.095 165.858);
+  --success-muted-foreground: oklch(0.905 0.093 164.15);
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.205 0 0);

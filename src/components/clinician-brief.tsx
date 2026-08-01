@@ -32,16 +32,17 @@ export function ClinicianBrief({
     <div className="flex flex-col gap-6">
       <Card>
         <CardHeader>
-          <CardTitle>{draft.chiefConcern}</CardTitle>
+          {/* The chief concern is the headline of the whole brief. */}
+          <CardTitle className="text-2xl leading-snug">{draft.chiefConcern}</CardTitle>
         </CardHeader>
-        <CardContent className="grid grid-cols-2 gap-4 text-sm">
+        <CardContent className="grid grid-cols-2 gap-4 text-base">
           <div>
-            <p className="text-muted-foreground">Onset</p>
-            <p>{draft.historyOfPresentIllness.onset ?? "Unknown"}</p>
+            <p className="text-sm text-muted-foreground">Onset</p>
+            <p className="font-medium">{draft.historyOfPresentIllness.onset ?? "Unknown"}</p>
           </div>
           <div>
-            <p className="text-muted-foreground">Location</p>
-            <p>{draft.historyOfPresentIllness.location ?? "Unknown"}</p>
+            <p className="text-sm text-muted-foreground">Location</p>
+            <p className="font-medium">{draft.historyOfPresentIllness.location ?? "Unknown"}</p>
           </div>
         </CardContent>
       </Card>
@@ -50,10 +51,10 @@ export function ClinicianBrief({
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Unresolved questions</CardTitle>
+          <CardTitle className="text-lg">Unresolved questions</CardTitle>
         </CardHeader>
         <CardContent>
-          <ul className="list-disc pl-5 text-sm text-slate-700">
+          <ul className="list-disc space-y-1 pl-5 text-base text-slate-700">
             {draft.unresolvedQuestions.map((question) => (
               <li key={question}>{question}</li>
             ))}
@@ -66,10 +67,12 @@ export function ClinicianBrief({
       <Separator />
 
       <div className="flex items-center justify-between gap-4">
-        <p className="text-xs text-muted-foreground">
+        <p className="text-sm text-muted-foreground">
           {approveBlockedReason ?? "Draft is unverified until a clinician approves it."}
         </p>
         <Button
+          size="lg"
+          className="h-12 px-6 text-base"
           onClick={onApprove}
           disabled={
             isApproving || draft.clinicianStatus === "approved" || Boolean(approveBlockedReason)
