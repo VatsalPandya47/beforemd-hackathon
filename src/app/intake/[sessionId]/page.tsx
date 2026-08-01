@@ -286,18 +286,31 @@ export default function IntakePage() {
           : "idle";
 
   return (
-    <main className="mx-auto grid min-h-screen max-w-5xl grid-cols-1 gap-8 p-8 md:grid-cols-[2fr_1fr]">
+    <main className="mx-auto grid min-h-screen max-w-6xl grid-cols-1 gap-10 p-8 md:grid-cols-[2fr_1fr] md:p-10">
       <div className="flex flex-col gap-6">
+        {/* This screen had no title at all, which left the projector showing an
+            unlabelled orb. The other two screens carry the same eyebrow-and-
+            heading pair, so it reads as one product rather than three pages. */}
+        <div>
+          <p className="text-sm font-semibold tracking-[0.12em] text-primary uppercase">
+            BeforeMD
+          </p>
+          <h1 className="mt-1 text-3xl font-semibold tracking-tight text-slate-900">
+            Pre-visit intake
+          </h1>
+        </div>
+
         <VoiceOrb state={orbState} level={voice.level} />
 
         <div className="flex flex-col items-center gap-2">
           <div className="flex items-center gap-2">
             {voiceActive ? (
-              <Button variant="outline" onClick={endVoice}>
+              <Button variant="outline" className="h-10 text-base" onClick={endVoice}>
                 End voice session
               </Button>
             ) : (
               <Button
+                className="h-10 text-base"
                 onClick={startVoice}
                 disabled={voice.phase === "starting" || replay.active}
               >
@@ -309,11 +322,11 @@ export default function IntakePage() {
                 after a failure: on stage the operator needs it to be one
                 predictable click, not a control that shows up under stress. */}
             {replay.active ? (
-              <Button variant="outline" onClick={replay.stop}>
+              <Button variant="outline" className="h-10 text-base" onClick={replay.stop}>
                 Stop replay
               </Button>
             ) : (
-              <Button variant="outline" onClick={replay.start}>
+              <Button variant="outline" className="h-10 text-base" onClick={replay.start}>
                 {replay.phase === "done" ? "Replay again" : "Replay demo"}
               </Button>
             )}
@@ -370,7 +383,11 @@ export default function IntakePage() {
         {replay.error && <p className="text-center text-sm text-red-600">{replay.error}</p>}
         {turnError && <p className="text-center text-sm text-red-600">{turnError}</p>}
 
-        <LiveTranscript events={transcript} interim={voice.interim} />
+        {/* Framed so an empty transcript reads as "nothing said yet" rather than
+            as a blank half of the screen. */}
+        <div className="min-h-64 rounded-xl bg-white/70 p-5 ring-1 ring-slate-900/5">
+          <LiveTranscript events={transcript} interim={voice.interim} />
+        </div>
 
         {/* Replay drives the state machine from committed events rather than
             through it, so it never reaches CLINICIAN_REVIEW_READY and never
@@ -390,7 +407,7 @@ export default function IntakePage() {
         {replay.phase === "done" &&
           (replay.source === "fixture" ? (
             <Button
-              className="self-center"
+              className="h-12 self-center px-6 text-base"
               onClick={() => router.push(`/clinician/${params.sessionId}`)}
             >
               Continue to clinician review
@@ -424,6 +441,7 @@ export default function IntakePage() {
             className="min-h-0"
           />
           <Button
+            className="h-10 text-base"
             onClick={submitTyped}
             disabled={turnPhase !== "idle" || !typed.trim() || replay.active}
           >
@@ -431,7 +449,7 @@ export default function IntakePage() {
           </Button>
         </div>
 
-        <p className="text-xs text-muted-foreground">
+        <p className="text-sm text-muted-foreground">
           Synthetic demo only. Clinician review required.{" "}
           {replay.active ? "Replaying a recorded session." : `Current state: ${nextState}`}
         </p>

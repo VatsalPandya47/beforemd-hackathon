@@ -16,6 +16,13 @@ export function LiveTranscript({
 }) {
   return (
     <div className="flex flex-col gap-3 overflow-y-auto">
+      {events.length === 0 && !interim && (
+        // An unframed empty region reads as something failing to load. Saying
+        // what will appear here is calmer than a blank half-screen.
+        <p className="py-8 text-center text-base text-muted-foreground">
+          The conversation will appear here as the patient speaks.
+        </p>
+      )}
       {events.map((event, index) => (
         // Keyed by position, for the same reason as the activity rail: this is
         // an append-only log that never reorders, and `event.id` is not unique
@@ -25,17 +32,19 @@ export function LiveTranscript({
         <div
           key={index}
           className={cn(
-            "max-w-[80%] rounded-2xl px-4 py-2 text-sm",
+            // text-base/lg, not text-sm: this is the one region a judge reads
+            // from several feet away while the demo runs.
+            "max-w-[80%] rounded-2xl px-5 py-3 text-base leading-relaxed md:text-lg",
             event.speaker === "agent"
-              ? "self-start bg-slate-100 text-slate-900"
-              : "self-end bg-blue-600 text-white"
+              ? "self-start bg-white text-slate-900 ring-1 ring-slate-900/10"
+              : "self-end bg-primary text-primary-foreground"
           )}
         >
           {event.text}
         </div>
       ))}
       {interim && (
-        <div className="max-w-[80%] self-end rounded-2xl bg-blue-600/50 px-4 py-2 text-sm text-white">
+        <div className="max-w-[80%] self-end rounded-2xl bg-primary/50 px-5 py-3 text-base leading-relaxed text-primary-foreground md:text-lg">
           {interim}
         </div>
       )}
