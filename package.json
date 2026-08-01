@@ -12,6 +12,7 @@
   "dependencies": {
     "@base-ui/react": "^1.6.0",
     "@deepgram/sdk": "^5.7.0",
+    "@inferedge/moss": "^1.0.0-beta.8",
     "@medplum/core": "^4.5.2",
     "@medplum/fhirtypes": "^4.5.2",
     "@medplum/react": "^4.5.2",
