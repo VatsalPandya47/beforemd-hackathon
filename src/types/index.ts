@@ -1,8 +1,10 @@
 // Shared domain types for BeforeMD. Mirrors doc section 6 (API contracts) and section 7 (agent schema).
 
+export type ToolSource = "live" | "cache" | "fixture";
+
 export type ToolResult<T> = {
   ok: boolean;
-  source: "live" | "cache" | "fixture";
+  source: ToolSource;
   data?: T;
   error?: string;
   latencyMs: number;
@@ -100,6 +102,20 @@ export type FhirWriteResult = {
   taskFhirId: string;
   questionnaireResponseFhirId: string;
   clinicalImpressionFhirId: string;
+};
+
+// The clinician brief renders these ids as proof of what approval wrote to the
+// chart, so `source` travels with them: writeDraft has a fixture branch that
+// returns DEMO_* ids without contacting Medplum at all (medplum.ts), and a
+// provenance claim the UI cannot qualify is worse than no claim.
+export type ApproveResponse = FhirWriteResult & {
+  status: "approved";
+  source: ToolSource;
+};
+
+export type ApproveErrorResponse = {
+  error: string;
+  source: ToolSource;
 };
 
 // --- Moss (context retrieval) ---

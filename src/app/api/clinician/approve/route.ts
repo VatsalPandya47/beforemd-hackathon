@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { writeDraft } from "@/lib/integrations/medplum";
+import type { ApproveErrorResponse, ApproveResponse } from "@/types";
 
 const ApproveSchema = z.object({
   sessionId: z.string().uuid(),
@@ -40,8 +41,17 @@ export async function POST(request: NextRequest) {
     clinicalImpressionNote: draft?.chief_concern ?? "",
   });
 
+  // Unlike the read path, writeDraft has no fixture fallback on failure — it
+  // ignores ALLOW_FIXTURE_FALLBACK — so this branch means nothing reached the
+  // chart. The message goes to the client rather than only the log: the
+  // clinician screen has to be able to say so out loud.
   if (!result.ok || !result.data) {
-    return NextResponse.json({ error: result.error }, { status: 502 });
+    const body: ApproveErrorResponse = {
+      error: result.error ?? "Medplum write failed",
+      source: result.source,
+    };
+    console.error("[clinician/approve] write-back failed", { sessionId, ...body });
+    return NextResponse.json(body, { status: 502 });
   }
 
   await supabase
@@ -49,5 +59,10 @@ export async function POST(request: NextRequest) {
     .update({ clinician_status: "approved", updated_at: new Date().toISOString() })
     .eq("session_id", sessionId);
 
-  return NextResponse.json({ status: "approved", ...result.data });
+  const body: ApproveResponse = {
+    status: "approved",
+    source: result.source,
+    ...result.data,
+  };
+  return NextResponse.json(body);
 }
