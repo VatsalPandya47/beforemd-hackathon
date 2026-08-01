@@ -8,7 +8,10 @@ import type { NextConfig } from "next";
 // even though local dev (same native path, no tracer) worked fine.
 const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
-    "/api/agent/turn": ["./node_modules/onnxruntime-node/bin/napi-v3/linux/**/*"],
+    // linux/x64 only — Vercel Functions run on x86_64 with no arm64 option
+    // exposed anywhere in this project's config, so the arm64 binaries
+    // (~35MB) were dead weight against the 250MB function package limit.
+    "/api/agent/turn": ["./node_modules/onnxruntime-node/bin/napi-v3/linux/x64/**/*"],
   },
 };
 
