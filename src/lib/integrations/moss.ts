@@ -1,14 +1,17 @@
-import { MossClient } from "@inferedge/moss";
-import { env as transformersEnv } from "@huggingface/transformers";
 import { flags } from "@/lib/flags";
 import { demoPatientContext, demoRetrievedContext } from "@/lib/demo-fixtures";
 import type { PatientContext, RetrievedContext, ToolResult } from "@/types";
+import type { MossClient as MossClientType } from "@inferedge/moss";
 
-// Vercel's function filesystem is read-only outside /tmp. transformers.js
-// defaults to caching downloaded model files inside its own package
-// directory (./.cache), which fails there with ENOENT on mkdir. Point it at
-// the one writable path instead.
-transformersEnv.cacheDir = "/tmp/transformers-cache/";
+// @inferedge/moss statically imports @huggingface/transformers, which loads
+// the native ONNX runtime stack at module-evaluation time — before any
+// function body runs, and outside every try/catch (issue #38; this is why
+// #34's missing-binary bug was a hard 500 for every /api/agent/turn call
+// rather than a graceful fixture fallback for just the Moss step). Both
+// packages are imported dynamically inside getLoadedClient() instead, so a
+// future native-load failure degrades to fixtures like every other failure
+// mode in this adapter, rather than crashing the whole route regardless of
+// state.
 
 // Moss does on-device semantic search: the index is built in their cloud, then
 // pulled down and queried locally (see docs/sponsor-notes.md). The management
@@ -107,9 +110,9 @@ export function buildClinicalDocuments(context: PatientContext): MossDocument[] 
 
 // Loading is per-process and expensive, so it is cached. A failure clears the
 // cache so the next request retries rather than being stuck on a bad load.
-let loadedClient: Promise<MossClient> | null = null;
+let loadedClient: Promise<MossClientType> | null = null;
 
-async function getLoadedClient(): Promise<MossClient> {
+async function getLoadedClient(): Promise<MossClientType> {
   if (loadedClient) return loadedClient;
 
   loadedClient = (async () => {
@@ -118,6 +121,17 @@ async function getLoadedClient(): Promise<MossClient> {
     if (!projectId || !projectKey) {
       throw new Error("Moss project credentials are not configured");
     }
+
+    const [{ MossClient }, { env: transformersEnv }] = await Promise.all([
+      import("@inferedge/moss"),
+      import("@huggingface/transformers"),
+    ]);
+
+    // Vercel's function filesystem is read-only outside /tmp. transformers.js
+    // defaults to caching downloaded model files inside its own package
+    // directory (./.cache), which fails there with ENOENT on mkdir. Point it
+    // at the one writable path instead.
+    transformersEnv.cacheDir = "/tmp/transformers-cache/";
 
     const client = new MossClient(projectId, projectKey);
 
