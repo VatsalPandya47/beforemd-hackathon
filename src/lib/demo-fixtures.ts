@@ -2,7 +2,9 @@ import type {
   ClinicalDraft,
   CoverageSummary,
   PatientContext,
+  PatientRequest,
   RetrievedContext,
+  VisitHistory,
 } from "@/types";
 
 // Synthetic-only demo patient (doc section 2). Real FHIR IDs get filled in
@@ -58,6 +60,52 @@ export const demoRetrievedContext: RetrievedContext[] = [
     relevance: 0.92,
   },
 ];
+
+// Dates match scripts/seed-medplum.mjs exactly, for the same reason every other
+// date in this file does: the live path and this fallback must render the same
+// history. The seed's check() asserts the shared ones appear here.
+export const demoVisitHistory: VisitHistory = {
+  upcoming: [
+    {
+      fhirId: "DEMO_APPOINTMENT_DERMATOLOGY",
+      resourceType: "Appointment",
+      description: "Dermatology consultation - recurring rash",
+      date: "2026-08-05T15:00:00.000Z",
+      status: "booked",
+      practitionerFhirId: "DEMO_PRACTITIONER_DERMATOLOGY",
+      practitionerName: "Dr. Elena Ruiz",
+    },
+  ],
+  past: [
+    {
+      fhirId: "DEMO_ENCOUNTER_DERMATOLOGY",
+      resourceType: "Encounter",
+      description: "Dermatology consultation",
+      date: "2026-07-10T00:00:00.000Z",
+      status: "finished",
+      practitionerFhirId: "DEMO_PRACTITIONER_DERMATOLOGY",
+      practitionerName: "Dr. Elena Ruiz",
+    },
+  ],
+  careTeam: [
+    {
+      fhirId: "DEMO_PRACTITIONER_DERMATOLOGY",
+      name: "Dr. Elena Ruiz",
+      specialty: "Dermatology",
+    },
+    {
+      fhirId: "DEMO_PRACTITIONER_PRIMARY_CARE",
+      name: "Dr. Marcus Hale",
+      specialty: "Family Medicine",
+    },
+  ],
+};
+
+// Empty on purpose. A request is something this patient did, so inventing one
+// would put words in their mouth on a screen that shows their own messages
+// back to them — unlike the chart fixtures, which stand in for records that do
+// exist. An empty list renders as the empty state, which is the truth.
+export const demoPatientRequests: PatientRequest[] = [];
 
 export const demoCoverageSummary: CoverageSummary = {
   active: true,

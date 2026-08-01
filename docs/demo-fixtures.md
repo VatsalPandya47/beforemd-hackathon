@@ -19,20 +19,33 @@ and this table.
 
 | FHIR resource | Use in demo | Resource ID |
 | --- | --- | --- |
-| Patient | Maya's demographics and identifiers | `718cf8c0-a789-460e-830a-06922744e42b` |
-| Appointment | Upcoming dermatology visit | `0214fa7a-bfea-4af8-a393-a9d5adecaafd` |
-| Encounter | Pre-visit intake encounter | `09ec4658-2803-44b2-b99b-a075750ae6ec` |
-| MedicationRequest | Lamotrigine start date and status | `54e002a3-3729-4efd-a871-4c14b55bb922` |
-| MedicationStatement | Patient-reported medication usage or restart | `8efe38a0-eed9-4925-b74f-a7f76dafbd06` |
-| Condition | Rash or dermatitis history | `11fb9a58-bfa5-4f4f-aea1-cf6f2d9cded4` |
-| AllergyIntolerance | Known allergies and safety context | `43e2f83a-11ac-45e2-9884-1d01d1f70c6b` |
-| Observation | Symptom severity or patient-reported findings | `9aaa7f33-428d-4ae9-911b-1078f7cf0136` |
-| DocumentReference | Prior note mentioning the first rash episode | `2c06ba1a-4856-45b6-8ff2-7caf7f855f71` |
+| Patient | Maya's demographics and identifiers | `54dbb9a7-7430-414b-9b82-9914a552212c` |
+| Practitioner | Dr. Elena Ruiz, dermatology — the care team and the July visit | `504bc5dc-798d-42ad-bfec-e21de1492022` |
+| Practitioner | Dr. Marcus Hale, family medicine — on the intake encounter | `45ebe31f-aaaf-4b20-948c-b502415f7901` |
+| Appointment | Upcoming dermatology visit | `a77c6593-5fe3-4872-9683-6f0e630cbaeb` |
+| Encounter | Pre-visit intake encounter (`planned`) | `21e8a500-a43d-4501-a5dc-7317c170e829` |
+| Encounter | July dermatology visit (`finished`) — the past visit in the portal | `1d089cd4-e9ee-483b-96aa-a9644799cf63` |
+| MedicationRequest | Lamotrigine start date and status | `490867b9-1dd2-4786-abae-a66f13fa22ac` |
+| MedicationStatement | Patient-reported medication usage or restart | `396b151e-9b84-419e-9850-7bf0e59cee68` |
+| Condition | Rash or dermatitis history | `21d702f0-7908-46d3-8c3d-5d4beb155768` |
+| AllergyIntolerance | Known allergies and safety context | `cc01ce33-2b73-4940-906b-1e6f1c55f092` |
+| Observation | Symptom severity or patient-reported findings | `6f754b7b-1758-4773-9226-33a1fb45452c` |
+| DocumentReference | Prior note mentioning the first rash episode | `fa40017d-13d9-4f57-a871-7727ac362e29` |
 | QuestionnaireResponse | Structured answers from the voice intake | written at runtime by `writeDraft` |
 | ClinicalImpression | Draft reasoning support, explicitly unverified | written at runtime by `writeDraft` |
 | Task | Clinician review task | written at runtime by `writeDraft` |
+| Task | Patient request (question / refill / appointment / records) | written at runtime by `createPatientRequest` |
 | Communication | Patient-facing follow-up summary | not implemented |
 | Provenance | Optional record of agent-generated artifacts | not implemented |
+
+Note there are **two** Encounters. `DEMO_ENCOUNTER_FHIR_ID` is the `planned` intake one — the
+script picks it by status, not by position. The `finished` one is what the patient portal shows
+under past visits, and it is what makes "doctors you have seen" non-empty.
+
+Patient-request Tasks deliberately carry **no** demo identifier, so a reseed leaves them in place
+rather than deleting them. They accumulate across demo runs, the same way the clinician-review
+Tasks from `writeDraft` do. Harmless — nothing reads them except the patient portal, which finds
+them by `requester`.
 
 ## Seed requirements
 

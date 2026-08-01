@@ -5,7 +5,11 @@ import { demoIds } from "@/lib/flags";
 import type { AgentState } from "@/types";
 
 const CreateSessionSchema = z.object({
-  patientFhirId: z.string().min(1),
+  // Optional so the browser never has to know the id. DEMO_PATIENT_FHIR_ID is
+  // not NEXT_PUBLIC_, so a client component reads it as undefined — the landing
+  // page used to send the literal string "DEMO_PATIENT_FHIR_ID" and every
+  // session pointed at a patient Medplum does not have.
+  patientFhirId: z.string().min(1).optional(),
   mode: z.enum(["live", "replay"]).default("live"),
 });
 
@@ -15,11 +19,19 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
+  const patientFhirId = parsed.data.patientFhirId ?? demoIds.patientFhirId;
+  if (!patientFhirId) {
+    return NextResponse.json(
+      { error: "No patient to start a session for: DEMO_PATIENT_FHIR_ID is not set." },
+      { status: 500 }
+    );
+  }
+
   const supabase = createAdminClient();
   const { data, error } = await supabase
     .from("demo_sessions")
     .insert({
-      patient_fhir_id: parsed.data.patientFhirId,
+      patient_fhir_id: patientFhirId,
       // Without this the column stays null, and writeDraft then omits the
       // encounter reference — the intake answers end up unattached to the visit.
       encounter_fhir_id: demoIds.encounterFhirId || null,

@@ -40,8 +40,33 @@ const patient = {
   name: [{ text: "Maya Thompson", family: "Thompson", given: ["Maya"] }],
 };
 
-function dependents(patientId, appointmentId) {
+// The patient portal answers "which doctors have I seen?" by collecting the
+// practitioners referenced from this patient's Encounters and Appointments, so
+// these have to be attached to those resources rather than just existing.
+//
+// ponytail: specialty rides on Practitioner.qualification.code as text. Strictly
+// it belongs on a PractitionerRole; add that resource if a role, an organization,
+// or per-role scheduling ever matters.
+const practitioners = {
+  derm: {
+    resourceType: "Practitioner",
+    identifier,
+    active: true,
+    name: [{ text: "Dr. Elena Ruiz", family: "Ruiz", given: ["Elena"], prefix: ["Dr."] }],
+    qualification: [{ code: { text: "Dermatology" } }],
+  },
+  pcp: {
+    resourceType: "Practitioner",
+    identifier,
+    active: true,
+    name: [{ text: "Dr. Marcus Hale", family: "Hale", given: ["Marcus"], prefix: ["Dr."] }],
+    qualification: [{ code: { text: "Family Medicine" } }],
+  },
+};
+
+function dependents(patientId, appointmentId, practitionerIds) {
   const subject = { reference: `Patient/${patientId}` };
+  const dermatologist = `Practitioner/${practitionerIds.derm}`;
 
   return [
     {
@@ -51,7 +76,24 @@ function dependents(patientId, appointmentId) {
       class: { system: "http://terminology.hl7.org/CodeSystem/v3-ActCode", code: "AMB", display: "ambulatory" },
       type: [{ text: "Pre-visit intake" }],
       subject,
+      participant: [{ individual: { reference: `Practitioner/${practitionerIds.pcp}` } }],
       appointment: [{ reference: `Appointment/${appointmentId}` }],
+    },
+    {
+      // The visit the prior note came from. Without a finished Encounter the
+      // portal's "doctors you have seen" is empty — the other Encounter is the
+      // planned intake, which is not a visit that happened.
+      resourceType: "Encounter",
+      identifier,
+      status: "finished",
+      class: { system: "http://terminology.hl7.org/CodeSystem/v3-ActCode", code: "AMB", display: "ambulatory" },
+      type: [{ text: "Dermatology consultation" }],
+      subject,
+      participant: [{ individual: { reference: dermatologist } }],
+      period: {
+        start: `${PRIOR_NOTE_DATE}T00:00:00.000Z`,
+        end: `${PRIOR_NOTE_DATE}T00:30:00.000Z`,
+      },
     },
     {
       resourceType: "MedicationRequest",
@@ -120,6 +162,7 @@ function dependents(patientId, appointmentId) {
       // description is what getPatientContext maps to priorDocuments[].title
       description: "Dermatology visit note - first rash episode",
       subject,
+      author: [{ reference: dermatologist }],
       date: `${PRIOR_NOTE_DATE}T00:00:00.000Z`,
       content: [
         {
@@ -133,7 +176,7 @@ function dependents(patientId, appointmentId) {
   ];
 }
 
-function appointment(patientId) {
+function appointment(patientId, practitionerIds) {
   return {
     resourceType: "Appointment",
     identifier,
@@ -142,7 +185,10 @@ function appointment(patientId) {
     description: "Dermatology consultation - recurring rash",
     start: APPOINTMENT_START,
     end: new Date(Date.parse(APPOINTMENT_START) + 30 * 60_000).toISOString(),
-    participant: [{ actor: { reference: `Patient/${patientId}` }, status: "accepted" }],
+    participant: [
+      { actor: { reference: `Patient/${patientId}` }, status: "accepted" },
+      { actor: { reference: `Practitioner/${practitionerIds.derm}` }, status: "accepted" },
+    ],
   };
 }
 
@@ -171,9 +217,32 @@ function check() {
   }
   if (!fixtures.includes(PRIOR_NOTE_TEXT)) fail("prior note text does not match the excerpt in src/lib/demo-fixtures.ts");
 
-  const built = [patient, appointment("X"), ...dependents("X", "Y")];
+  const practitionerIds = { derm: "P-DERM", pcp: "P-PCP" };
+  const built = [
+    patient,
+    ...Object.values(practitioners),
+    appointment("X", practitionerIds),
+    ...dependents("X", "Y", practitionerIds),
+  ];
   for (const r of built) {
     if (!r.identifier?.[0]?.value) fail(`${r.resourceType} is missing the demo identifier — reseed would orphan it`);
+  }
+
+  // The portal's care team is derived from practitioner references on the
+  // patient's Encounters and Appointments, never from a Practitioner search —
+  // so one that is seeded but never referenced would silently not exist.
+  const referenced = new Set();
+  for (const r of built) {
+    for (const participant of r.participant ?? []) {
+      const reference = participant.actor?.reference ?? participant.individual?.reference;
+      if (reference?.startsWith("Practitioner/")) referenced.add(reference.slice("Practitioner/".length));
+    }
+    for (const author of r.author ?? []) {
+      if (author.reference?.startsWith("Practitioner/")) referenced.add(author.reference.slice("Practitioner/".length));
+    }
+  }
+  for (const id of Object.values(practitionerIds)) {
+    if (!referenced.has(id)) fail(`Practitioner ${id} is seeded but never referenced — it would not appear in the care team`);
   }
 
   return built;
@@ -227,14 +296,26 @@ const created = [];
 const createdPatient = await medplum.createResource(patient);
 created.push(createdPatient);
 
-const createdAppointment = await medplum.createResource(appointment(createdPatient.id));
+// Before the Appointment and the Encounter, which reference them.
+const practitionerIds = {};
+for (const [key, practitioner] of Object.entries(practitioners)) {
+  const createdPractitioner = await medplum.createResource(practitioner);
+  created.push(createdPractitioner);
+  practitionerIds[key] = createdPractitioner.id;
+}
+
+const createdAppointment = await medplum.createResource(
+  appointment(createdPatient.id, practitionerIds)
+);
 created.push(createdAppointment);
 
-for (const resource of dependents(createdPatient.id, createdAppointment.id)) {
+for (const resource of dependents(createdPatient.id, createdAppointment.id, practitionerIds)) {
   created.push(await medplum.createResource(resource));
 }
 
-const encounter = created.find((r) => r.resourceType === "Encounter");
+// Explicitly the planned intake one, not just the first Encounter — there are
+// two now, and the other is the finished July visit.
+const encounter = created.find((r) => r.resourceType === "Encounter" && r.status === "planned");
 
 console.log("\nSeeded:");
 for (const r of created) console.log(`  ${r.resourceType.padEnd(20)} ${r.id}`);

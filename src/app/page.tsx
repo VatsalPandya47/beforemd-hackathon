@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { demoIds } from "@/lib/flags";
 import { DEMO_PATIENT_NAME } from "@/lib/demo-fixtures";
 
 const SPONSOR_STATUS = ["Medplum", "Deepgram", "Moss", "Stedi"];
@@ -19,13 +18,15 @@ export default function ClinicianDashboardPage() {
     setLoading(true);
     setError(null);
     try {
+      // No patientFhirId: this is a client component, so it cannot read
+      // DEMO_PATIENT_FHIR_ID (not NEXT_PUBLIC_ — it is absent from the browser
+      // bundle, and the old `demoIds.patientFhirId || "DEMO_PATIENT_FHIR_ID"`
+      // always took the fallback and started every session on a patient that
+      // does not exist). The route fills it in from the server env instead.
       const response = await fetch("/api/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          patientFhirId: demoIds.patientFhirId || "DEMO_PATIENT_FHIR_ID",
-          mode: "live",
-        }),
+        body: JSON.stringify({ mode: "live" }),
       });
       if (!response.ok) throw new Error("Failed to start session");
       const { sessionId } = await response.json();

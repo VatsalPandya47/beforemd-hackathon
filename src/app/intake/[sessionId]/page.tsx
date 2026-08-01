@@ -8,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { VoiceOrb, type VoiceOrbState } from "@/components/voice-orb";
 import { LiveTranscript } from "@/components/live-transcript";
 import { AgentActivity } from "@/components/agent-activity";
+import { HealthRecordSheet } from "@/components/patient-portal";
 import { useVoiceSession, type UseVoiceSession } from "@/lib/voice/use-voice-session";
 import { useReplaySession, type ReplayFrame } from "@/lib/replay/use-replay-session";
 import {
@@ -127,7 +128,10 @@ export default function IntakePage() {
         if (result.nextState === "CLINICIAN_REVIEW_READY") {
           voiceRef.current?.stop();
           setVoiceActive(false);
-          router.push(`/clinician/${params.sessionId}`);
+          // The patient's own record, not the clinician's brief. This used to
+          // hand the patient the clinician screen; that screen is now reached
+          // from a link there, or directly by the operator.
+          router.push(`/patient/${params.sessionId}`);
         }
       } catch (error) {
         // An abort is this screen abandoning the turn, not a failure to report.
@@ -286,6 +290,12 @@ export default function IntakePage() {
   return (
     <main className="mx-auto grid min-h-screen max-w-5xl grid-cols-1 gap-8 p-8 md:grid-cols-[2fr_1fr]">
       <div className="flex flex-col gap-6">
+        {/* Before the conversation, not after it: the patient can see what the
+            clinic already has on file rather than being asked to recite it. */}
+        <div className="flex justify-start">
+          <HealthRecordSheet sessionId={params.sessionId} />
+        </div>
+
         <VoiceOrb state={orbState} level={voice.level} />
 
         <div className="flex flex-col items-center gap-2">
@@ -382,12 +392,21 @@ export default function IntakePage() {
             belonging to its own session id and labels where it came from, the
             handoff is truthful from either replay source. */}
         {replay.phase === "done" && (
-          <Button
-            className="self-center"
-            onClick={() => router.push(`/clinician/${params.sessionId}`)}
-          >
-            Continue to clinician review
-          </Button>
+          <div className="flex justify-center gap-2">
+            {/* Both destinations, because a replayed run has to be able to show
+                either half of the product. The live path routes to the patient
+                portal on its own; replay never reaches that state, so without
+                this button the portal is unreachable from a replayed demo. */}
+            <Button onClick={() => router.push(`/patient/${params.sessionId}`)}>
+              Continue to your record
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => router.push(`/clinician/${params.sessionId}`)}
+            >
+              Clinician review
+            </Button>
+          </div>
         )}
 
         <div className="flex gap-2">
