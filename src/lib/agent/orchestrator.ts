@@ -86,16 +86,34 @@ const SCRIPTED_QUESTIONS = {
     "Are you having trouble breathing, swelling of the face or mouth, fever, or sores in your mouth?",
 } as const;
 
-// LLM call budget: the AI Gateway free tier throttles after a handful of calls
-// (rolling window, not a hard cap — see issue #47), and a full run needs 5-6
-// (4 questions + the draft's retry). Until credits land, only states in this
-// set get an LLM-rephrased question — everywhere else speaks the scripted
-// line verbatim. GENERATE_DRAFT always calls the model regardless of this
-// set; the draft is the call that actually needs to land.
+// What each step needs to establish. The model decides what to actually ask in
+// service of the goal, so it can follow the patient instead of a script — a
+// patient reporting a sore throat was previously asked whether their rash
+// predated lamotrigine, because the question text was fixed to the demo story.
+// SCRIPTED_QUESTIONS above are now the fallback for these steps, not the plan.
+const QUESTION_GOALS: Partial<Record<AgentState, string>> = {
+  LOAD_HISTORY:
+    "Open the intake. Find out, in their own words, what the patient most wants their clinician to understand today.",
+  OPENING_QUESTION:
+    "Establish the timing and course of the concern they just raised — when it started, and whether anything in their history lines up with it.",
+  IDENTIFY_GAP:
+    "Find the missing detail that would most change how a clinician reads this: what makes it better or worse, whether it has happened before, or what they have already tried.",
+};
+
+// Which steps get to ask a model-generated question. ASK_ADAPTIVE_QUESTION is
+// deliberately excluded: that step asks the compound red-flag question, and its
+// wording enumerates the specific symptoms the deterministic screen looks for.
+// A model rephrasing it could quietly drop one, so it stays verbatim.
 //
-// Restore the full adaptive experience in one line: add "LOAD_HISTORY",
-// "IDENTIFY_GAP", and "ASK_ADAPTIVE_QUESTION" back to this set.
-const LLM_QUESTION_STATES = new Set<AgentState>(["OPENING_QUESTION"]);
+// Cost: three question calls plus the draft. The AI Gateway free tier throttles
+// after roughly 3-5 (issue #47), so on a spent bucket some turns fall back to
+// the scripted line — which is exactly the old behaviour, no worse. Credits
+// remove the ceiling.
+const LLM_QUESTION_STATES = new Set<AgentState>([
+  "LOAD_HISTORY",
+  "OPENING_QUESTION",
+  "IDENTIFY_GAP",
+]);
 
 export async function runAgentTurn(
   sessionId: string,
@@ -139,7 +157,8 @@ export async function runAgentTurn(
       });
       const opening = LLM_QUESTION_STATES.has(currentState)
         ? await generateQuestion({
-            intent: SCRIPTED_QUESTIONS.opening,
+            goal: QUESTION_GOALS.LOAD_HISTORY ?? "",
+            fallback: SCRIPTED_QUESTIONS.opening,
             utterance,
             patientContext: context.data ?? null,
             transcript,
@@ -174,7 +193,8 @@ export async function runAgentTurn(
       }
       const question = LLM_QUESTION_STATES.has(currentState)
         ? await generateQuestion({
-            intent: SCRIPTED_QUESTIONS[currentState],
+            goal: QUESTION_GOALS[currentState] ?? "",
+            fallback: SCRIPTED_QUESTIONS[currentState],
             utterance,
             patientContext: await loadContext(),
             transcript,
