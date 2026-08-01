@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  ESCALATION_MESSAGE,
   applyBlanketDenial,
   checkSafetyRedFlags,
   hasActiveRedFlag,
@@ -84,6 +85,43 @@ test("a denial binds only to the symptom it precedes", () => {
 
   // The denied symptom in those same utterances stays denied.
   assert.equal(statusOf("no fever my face is swelling", "fever"), "absent");
+});
+
+// Regression: "my throat is sore" escalated as mucosal ulceration. The flag
+// means discrete lesions — the SJS/TEN concern — and a painful throat is
+// pharyngitis. Escalating a sore throat is both clinically wrong and the most
+// common thing a patient will say.
+test("a sore throat is not mucosal ulceration", () => {
+  for (const utterance of [
+    "i had a sore throat for 3 days now",
+    "my throat is sore",
+    "my throat is really sore and it hurts",
+    "my throat feels sore",
+    "it hurts when i swallow",
+  ]) {
+    assert.equal(escalates(utterance), false, `should not escalate: ${utterance}`);
+  }
+
+  // Genuine ulceration still escalates.
+  for (const utterance of [
+    "i have sores in my mouth",
+    "mouth sores",
+    "i have ulcers on my tongue",
+    "there are blisters inside my mouth",
+    "a sore on my lip",
+    "canker sores",
+  ]) {
+    assert.equal(statusOf(utterance, "mucosal sores"), "present", utterance);
+    assert.ok(escalates(utterance), `should escalate: ${utterance}`);
+  }
+});
+
+test("the escalation message names emergency services before a phone number", () => {
+  assert.match(ESCALATION_MESSAGE, /emergency services/i);
+  assert.ok(
+    ESCALATION_MESSAGE.indexOf("emergency services") < ESCALATION_MESSAGE.indexOf("care team"),
+    "emergency services must come before the clinic line — a red flag can mean airway compromise"
+  );
 });
 
 test("a denial carries across a list but not across new content", () => {
