@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { demoIds } from "@/lib/flags";
 import type { AgentState } from "@/types";
 
 const CreateSessionSchema = z.object({
@@ -19,6 +20,9 @@ export async function POST(request: NextRequest) {
     .from("demo_sessions")
     .insert({
       patient_fhir_id: parsed.data.patientFhirId,
+      // Without this the column stays null, and writeDraft then omits the
+      // encounter reference — the intake answers end up unattached to the visit.
+      encounter_fhir_id: demoIds.encounterFhirId || null,
       mode: parsed.data.mode,
       status: "CONSENT" satisfies AgentState,
       started_at: new Date().toISOString(),
