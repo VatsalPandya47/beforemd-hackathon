@@ -8,6 +8,7 @@ import {
 import type {
   AllergyIntolerance,
   Appointment,
+  Claim,
   Condition,
   DocumentReference,
   Encounter,
@@ -16,16 +17,22 @@ import type {
   Task,
 } from "@medplum/fhirtypes";
 import type {
+  CostEstimate,
   DraftWriteInput,
   FhirWriteResult,
   PatientContext,
   PatientRequest,
   PatientRequestInput,
   PatientRequestType,
+  SavedCostEstimate,
   ToolResult,
   VisitHistory,
   VisitSummary,
 } from "@/types";
+
+// Provider of record on the predetermination Claim. Not a real NPI-backed
+// organisation — same synthetic posture as the rest of the demo.
+const PROVIDER_DISPLAY = "BeforeMD Demo Practice";
 
 let client: MedplumClient | null = null;
 
@@ -450,6 +457,110 @@ export async function createPatientRequest(
       ok: false,
       source: "live",
       error: error instanceof Error ? error.message : "Medplum request write failed",
+      latencyMs: performance.now() - started,
+    };
+  }
+}
+
+// --- Cost estimate write-back ------------------------------------------------
+
+const COST_ESTIMATE_SYSTEM = "urn:beforemd:cost-estimate";
+
+/**
+ * Save an accepted cost estimate to the chart as a `Claim` with
+ * `use: "predetermination"` — R4's resource for "what would this cost before it
+ * happens", which is exactly what this is. A distinct resource type from Task,
+ * so it can never surface in the patient's request list (listPatientRequests
+ * searches `Task?requester=`).
+ *
+ * No fixture branch, same as createPatientRequest: on the fixture path this
+ * refuses rather than handing the patient an id that does not exist.
+ */
+export async function saveCostEstimate(input: {
+  patientFhirId: string;
+  estimate: CostEstimate;
+}): Promise<ToolResult<SavedCostEstimate>> {
+  const started = performance.now();
+
+  if (!flags.useLiveMedplum) {
+    return {
+      ok: false,
+      source: "fixture",
+      error: "Medplum is running on its fixture path, so this estimate was not saved.",
+      latencyMs: performance.now() - started,
+    };
+  }
+
+  try {
+    await ensureAuth();
+    const { estimate } = input;
+    const patientReference = { reference: `Patient/${input.patientFhirId}` };
+    const money = (cents: number) => ({ value: cents / 100, currency: "USD" as const });
+
+    const claim = await getClient().createResource<Claim>({
+      resourceType: "Claim",
+      status: "active",
+      type: { coding: [{ code: "professional" }] },
+      // The whole point: this is a cost prediction, not a bill for care given.
+      use: "predetermination",
+      patient: patientReference,
+      created: new Date().toISOString(),
+      // Required by R4 but not meaningful for a patient-facing estimate; the
+      // practice is the provider of record.
+      provider: { display: PROVIDER_DISPLAY },
+      priority: { coding: [{ code: "normal" }] },
+      insurance: [
+        {
+          sequence: 1,
+          focal: true,
+          coverage: { display: estimate.planName },
+        },
+      ],
+      item: [
+        {
+          sequence: 1,
+          productOrService: { text: estimate.serviceDescription },
+          net: money(estimate.allowedAmountCents),
+          ...(estimate.appointmentFhirId
+            ? { encounter: [{ reference: `Appointment/${estimate.appointmentFhirId}` }] }
+            : {}),
+        },
+      ],
+      total: money(estimate.allowedAmountCents),
+      // Claim has no field for "what the patient will owe" — that is
+      // ExplanationOfBenefit, which only exists after adjudication. The
+      // breakdown rides here so the chart carries what the patient was actually
+      // shown, not just the gross amount.
+      supportingInfo: [
+        {
+          sequence: 1,
+          category: { coding: [{ system: COST_ESTIMATE_SYSTEM, code: "patient-responsibility" }] },
+          valueString: JSON.stringify({
+            patientPaysCents: estimate.patientPaysCents,
+            insurancePaysCents: estimate.insurancePaysCents,
+            deductibleAppliedCents: estimate.deductibleAppliedCents,
+            coinsuranceCents: estimate.coinsuranceCents,
+            copayCents: estimate.copayCents,
+            lowCents: estimate.lowCents,
+            highCents: estimate.highCents,
+            confidence: estimate.confidence,
+            rateBasis: estimate.rateBasis,
+          }),
+        },
+      ],
+    });
+
+    return {
+      ok: true,
+      source: "live",
+      data: { claimFhirId: claim.id ?? "", patientPaysCents: estimate.patientPaysCents },
+      latencyMs: performance.now() - started,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      source: "live",
+      error: error instanceof Error ? error.message : "Medplum estimate write failed",
       latencyMs: performance.now() - started,
     };
   }

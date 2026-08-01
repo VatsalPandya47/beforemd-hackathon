@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { format, parseISO } from "date-fns";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,12 +18,17 @@ import {
 import { CoverageCard } from "@/components/coverage-card";
 import { LiveTranscript } from "@/components/live-transcript";
 import { SourceEvidence } from "@/components/source-evidence";
+import { formatCents, formatDollars, formatPercent } from "@/lib/format-money";
 import type {
+  CostEstimate,
+  CostEstimateResponse,
+  CostExplanation,
   PatientContext,
   PatientConversation,
   PatientOverview,
   PatientRequest,
   PatientRequestType,
+  SavedCostEstimate,
   VisitHistory,
   VisitSummary,
 } from "@/types";
@@ -641,6 +646,386 @@ function RequestsPanel({
   );
 }
 
+// --- What this visit costs ---------------------------------------------------
+
+const CONFIDENCE_VARIANT = {
+  high: "success",
+  medium: "secondary",
+  low: "outline",
+} as const;
+
+/** One line of the balance sheet. Emphasised rows carry the totals. */
+function MoneyRow({
+  label,
+  amount,
+  note,
+  tone = "plain",
+}: {
+  label: string;
+  amount: string;
+  note?: string;
+  tone?: "plain" | "credit" | "total";
+}) {
+  return (
+    <div
+      className={
+        tone === "total"
+          ? "flex items-baseline justify-between gap-3 border-t border-slate-200 pt-3"
+          : "flex items-baseline justify-between gap-3"
+      }
+    >
+      <div className="min-w-0">
+        <p
+          className={
+            tone === "total"
+              ? "text-sm font-semibold text-slate-900"
+              : "text-sm text-slate-700"
+          }
+        >
+          {label}
+        </p>
+        {note && <p className="text-xs text-slate-500">{note}</p>}
+      </div>
+      <p
+        className={
+          tone === "total"
+            ? "font-heading shrink-0 text-lg font-semibold text-slate-900"
+            : tone === "credit"
+              ? "shrink-0 text-sm text-emerald-700 tabular-nums"
+              : "shrink-0 text-sm text-slate-900 tabular-nums"
+        }
+      >
+        {amount}
+      </p>
+    </div>
+  );
+}
+
+function CostPanel({ sessionId }: { sessionId: string }) {
+  const [estimate, setEstimate] = useState<CostEstimate | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [source, setSource] = useState<CostEstimateResponse["source"] | null>(null);
+
+  const [explanation, setExplanation] = useState<CostExplanation | null>(null);
+  const [question, setQuestion] = useState("");
+  const [asking, setAsking] = useState(false);
+  const [answer, setAnswer] = useState<{ question: string; text: string } | null>(null);
+
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState<SavedCostEstimate | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Base UI unmounts an inactive tab panel, so this runs when the tab is first
+  // opened rather than on portal load — the estimate costs an eligibility check
+  // and a Medplum search, and most of the demo never opens this tab.
+  //
+  // The numbers and the explanation are two requests on purpose: the breakdown
+  // is deterministic and instant, the paragraph waits on a model. Rendering the
+  // first without blocking on the second is the whole reason the route is split.
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const response = await fetch(
+          `/api/patient/estimate?sessionId=${encodeURIComponent(sessionId)}`
+        );
+        const body = await response.json();
+        if (cancelled) return;
+        if (!response.ok) {
+          setLoadError(typeof body.error === "string" ? body.error : "Estimate unavailable");
+          return;
+        }
+        setEstimate(body.estimate);
+        setSource(body.source);
+      } catch {
+        if (!cancelled) setLoadError("Could not reach the server");
+        return;
+      }
+
+      try {
+        const response = await fetch("/api/patient/estimate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId }),
+        });
+        if (!response.ok || cancelled) return;
+        setExplanation(await response.json());
+      } catch {
+        // The breakdown is already on screen and speaks for itself; a missing
+        // paragraph is not worth an error state.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
+
+  async function ask(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed || asking) return;
+    setAsking(true);
+    setAnswer(null);
+    try {
+      const response = await fetch("/api/patient/estimate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId, question: trimmed }),
+      });
+      const body = await response.json();
+      setAnswer({
+        question: trimmed,
+        text: response.ok ? body.text : "That question could not be answered right now.",
+      });
+      setQuestion("");
+    } catch {
+      setAnswer({ question: trimmed, text: "That question could not be answered right now." });
+    } finally {
+      setAsking(false);
+    }
+  }
+
+  async function proceed() {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const response = await fetch("/api/patient/estimate/accept", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId }),
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        setSaveError(
+          typeof body.error === "string" ? body.error : "Your estimate could not be saved."
+        );
+        return;
+      }
+      setSaved(body.saved);
+    } catch {
+      setSaveError("Could not reach the server");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loadError) {
+    return (
+      <Card>
+        <CardContent className="pt-6">
+          <p className="text-sm text-muted-foreground">
+            {loadError.replace(/\.?$/, ".")} Reload to try again.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (!estimate) {
+    return (
+      <Card>
+        <CardContent className="pt-6">
+          <p className="text-sm text-muted-foreground">Working out what this visit will cost…</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const coinsuranceLabel =
+    estimate.coinsuranceRate !== null
+      ? `Coinsurance (${formatPercent(estimate.coinsuranceRate)})`
+      : "Coinsurance";
+
+  return (
+    <div className="flex flex-col gap-3">
+      <Card>
+        <CardHeader className="flex flex-row items-start justify-between gap-3">
+          <div className="min-w-0">
+            <CardTitle className="text-base">Estimated cost of this visit</CardTitle>
+            <p className="mt-1 text-xs text-slate-500">
+              {estimate.serviceDescription}
+              {estimate.appointmentDate && ` · ${formatDate(estimate.appointmentDate)}`}
+            </p>
+          </div>
+          <Badge variant={CONFIDENCE_VARIANT[estimate.confidence]} className="shrink-0 capitalize">
+            {estimate.confidence} confidence · {estimate.confidencePct}%
+          </Badge>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <div>
+            <p className="text-sm text-muted-foreground">You pay about</p>
+            <p className="font-heading text-4xl font-semibold text-slate-900">
+              {formatDollars(estimate.patientPaysCents)}
+            </p>
+            <p className="mt-1 text-sm text-slate-600">
+              Likely between {formatDollars(estimate.lowCents)} and{" "}
+              {formatDollars(estimate.highCents)}. This is an estimate, not a bill.
+            </p>
+          </div>
+
+          {/* The breakdown. Every figure that produced the number above, rather
+              than a total the patient has to take on trust. */}
+          <div className="flex flex-col gap-3 rounded-lg bg-slate-50 p-4">
+            <MoneyRow
+              label="Full price for this visit"
+              note={estimate.rateBasis}
+              amount={formatCents(estimate.allowedAmountCents)}
+            />
+            {estimate.deductibleAppliedCents > 0 && (
+              <MoneyRow
+                label="Your deductible"
+                note="What you pay yourself before the plan starts covering costs"
+                amount={formatCents(estimate.deductibleAppliedCents)}
+              />
+            )}
+            {estimate.coinsuranceCents > 0 && (
+              <MoneyRow
+                label={coinsuranceLabel}
+                note="Your share of what is left after the deductible"
+                amount={formatCents(estimate.coinsuranceCents)}
+              />
+            )}
+            {estimate.copayCents > 0 && (
+              <MoneyRow
+                label="Copay"
+                note="A flat fee for the visit, because your deductible is met"
+                amount={formatCents(estimate.copayCents)}
+              />
+            )}
+            <MoneyRow
+              label="Your insurance pays"
+              amount={`−${formatCents(estimate.insurancePaysCents)}`}
+              tone="credit"
+            />
+            <MoneyRow
+              label="Estimated you pay"
+              amount={formatCents(estimate.patientPaysCents)}
+              tone="total"
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Every input, not just the answer — the patient can check the working. */}
+      <Section title="What this is based on" empty="" count={1}>
+        <Row primary="Plan" secondary={estimate.planName} />
+        <Row primary="Network" secondary={estimate.network} />
+        <Row
+          primary="Full price agreed with your plan"
+          secondary={`${formatCents(estimate.allowedAmountCents)} · ${estimate.rateBasis}`}
+        />
+        <Row
+          primary="Deductible remaining before this visit"
+          secondary={formatCents(estimate.deductibleRemainingCents)}
+        />
+        <Row
+          primary="Your coinsurance rate"
+          secondary={
+            estimate.coinsuranceRate !== null
+              ? `${formatPercent(estimate.coinsuranceRate)} of costs after the deductible`
+              : "Not reported by your plan"
+          }
+        />
+        {estimate.assumptions.map((assumption) => (
+          <Row key={assumption} primary={assumption} />
+        ))}
+        <p className="text-xs text-slate-500">
+          Benefits checked with Stedi. The full price is a contracted-rate estimate, not a quote
+          from your plan.
+        </p>
+      </Section>
+
+      <Section title="What this means" empty="" count={1}>
+        <p className="text-sm text-slate-700">
+          {explanation?.text ?? "Putting this into plain English…"}
+        </p>
+
+        <div className="flex flex-col gap-2 border-t border-slate-100 pt-3">
+          <div className="flex flex-wrap gap-2">
+            {["Why is it so expensive?", "What is a deductible?", "Could I pay less?"].map(
+              (preset) => (
+                <Button
+                  key={preset}
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={asking}
+                  onClick={() => ask(preset)}
+                >
+                  {preset}
+                </Button>
+              )
+            )}
+          </div>
+          <Textarea
+            rows={2}
+            value={question}
+            onChange={(event) => setQuestion(event.target.value)}
+            placeholder="Ask anything about this estimate"
+            disabled={asking}
+          />
+          <div>
+            <Button type="button" size="sm" disabled={asking || !question.trim()} onClick={() => ask(question)}>
+              {asking ? "Asking…" : "Ask"}
+            </Button>
+          </div>
+          {answer && (
+            <div className="rounded-lg bg-slate-50 p-3">
+              <p className="text-xs font-medium text-slate-500">{answer.question}</p>
+              <p className="mt-1 text-sm text-slate-700">{answer.text}</p>
+            </div>
+          )}
+        </div>
+      </Section>
+
+      <Section title="This may change if" empty="" count={estimate.couldChange.length}>
+        {estimate.couldChange.map((item) => (
+          <Row key={item} primary={item} />
+        ))}
+      </Section>
+
+      <Card>
+        <CardContent className="flex flex-col gap-3 pt-6">
+          {saved ? (
+            <>
+              <p className="text-sm text-slate-700">
+                Saved to your record. Your care team can see the{" "}
+                {formatDollars(saved.patientPaysCents)} estimate you were shown.
+              </p>
+              <SourceEvidence sourceType="Claim" sourceId={saved.claimFhirId} label="Saved as" />
+            </>
+          ) : (
+            <>
+              <p className="text-sm text-slate-700">
+                Happy to go ahead? We will save this estimate to your record so your care team
+                knows what you were told.
+              </p>
+              {/* Deliberately not gated on `source`: the accept route surfaces the
+                  real reason a save failed, which beats a disabled button. */}
+              <div>
+                <Button type="button" disabled={saving} onClick={proceed}>
+                  {saving ? "Saving…" : "Proceed with appointment"}
+                </Button>
+              </div>
+              {saveError && <p className="text-sm text-destructive">{saveError}</p>}
+            </>
+          )}
+          {source !== "live" && (
+            <p className="text-xs text-amber-700">
+              This estimate uses demo benefit data, so it cannot be saved to a real chart.
+            </p>
+          )}
+          <p className="border-t border-slate-100 pt-3 text-xs text-slate-500">
+            Last year, 62% of Americans received an unexpected medical bill. We help patients
+            understand their costs before they receive one.
+          </p>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 // --- Portal ------------------------------------------------------------------
 
 export function PatientPortal({
@@ -657,6 +1042,7 @@ export function PatientPortal({
     { value: "visits", label: "My visits" },
     // Singular: the overview route scopes conversations to this session, so the
     // tab is always exactly one.
+    { value: "cost", label: "What it costs" },
     { value: "conversations", label: "This conversation" },
     { value: "requests", label: "Requests" },
   ];
@@ -677,6 +1063,10 @@ export function PatientPortal({
 
       <TabsContent value="visits">
         <VisitsPanel visits={overview.visits} coverage={overview.coverage} />
+      </TabsContent>
+
+      <TabsContent value="cost">
+        <CostPanel sessionId={sessionId} />
       </TabsContent>
 
       <TabsContent value="conversations">

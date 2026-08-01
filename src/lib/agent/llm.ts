@@ -1,9 +1,16 @@
 import { generateText, Output } from "ai";
-import { SYSTEM_PROMPT } from "@/lib/agent/prompts";
+import { COST_EXPLAINER_PROMPT, SYSTEM_PROMPT } from "@/lib/agent/prompts";
 import { ClinicalDraftSchema, type ClinicalDraftOutput } from "@/lib/agent/schemas";
 import { demoClinicalDraft } from "@/lib/demo-fixtures";
+import { formatCents, formatDollars } from "@/lib/format-money";
 import { flags } from "@/lib/flags";
-import type { ClinicalDraft, PatientContext, TranscriptEvent } from "@/types";
+import type {
+  ClinicalDraft,
+  CostEstimate,
+  CostExplanation,
+  PatientContext,
+  TranscriptEvent,
+} from "@/types";
 
 // LLM access goes through the Vercel AI Gateway (doc section 3: "provider
 // available through Deepgram or direct model API"). Auth is VERCEL_OIDC_TOKEN,
@@ -17,6 +24,11 @@ import type { ClinicalDraft, PatientContext, TranscriptEvent } from "@/types";
 
 const QUESTION_TIMEOUT_MS = 8_000;
 const DRAFT_TIMEOUT_MS = 20_000;
+const COST_TIMEOUT_MS = 10_000;
+
+// Longer than a spoken reply — this is read on screen, not heard — but still
+// capped so the panel cannot be flooded.
+const MAX_COST_WORDS = 130;
 
 // Doc section 7 rule 9 caps spoken replies at 35 words. Allow a small grace
 // margin, then fall back rather than speak a rambling line during the demo.
@@ -127,6 +139,127 @@ conversation. Reply with the question only — no preamble, one question, under
       message: error instanceof Error ? error.message : String(error),
     });
     return { text: intent, source: "fixture" };
+  }
+}
+
+/**
+ * The estimate as prompt lines. Every number the model is allowed to say appears
+ * here — the prompt forbids any other, which is only enforceable because this is
+ * the complete set.
+ */
+function costFacts(estimate: CostEstimate): string {
+  const lines = [
+    `Visit: ${estimate.serviceDescription}`,
+    `Plan: ${estimate.planName} (${estimate.network})`,
+    `Full price the clinic has agreed with the plan: ${formatCents(estimate.allowedAmountCents)}`,
+    `Deductible still owed before this visit: ${formatCents(estimate.deductibleRemainingCents)}`,
+    `Amount of that deductible this visit uses up: ${formatCents(estimate.deductibleAppliedCents)}`,
+  ];
+  if (estimate.coinsuranceRate !== null) {
+    lines.push(
+      `Coinsurance rate after the deductible: ${Math.round(estimate.coinsuranceRate * 100)}%`,
+      `Coinsurance owed on this visit: ${formatCents(estimate.coinsuranceCents)}`
+    );
+  }
+  if (estimate.copayCents > 0) lines.push(`Copay: ${formatCents(estimate.copayCents)}`);
+  lines.push(
+    `Insurance pays: ${formatCents(estimate.insurancePaysCents)}`,
+    `Patient pays: ${formatCents(estimate.patientPaysCents)}`,
+    `Likely range: ${formatDollars(estimate.lowCents)} to ${formatDollars(estimate.highCents)}`,
+    `Confidence: ${estimate.confidence} (${estimate.confidencePct}%)`,
+    `Could change if: ${estimate.couldChange.join("; ")}`
+  );
+  return lines.join("\n");
+}
+
+/**
+ * The explanation when the model is off or fails. Templated from the same
+ * numbers, so the Cost panel is fully usable with USE_LIVE_LLM=false — the model
+ * improves the wording, it is not load-bearing for the screen.
+ */
+function scriptedCostExplanation(estimate: CostEstimate): string {
+  const you = formatDollars(estimate.patientPaysCents);
+  const parts: string[] = [];
+
+  if (estimate.deductibleAppliedCents > 0) {
+    parts.push(
+      `You have ${formatDollars(estimate.deductibleAppliedCents)} left on your deductible — the amount you pay yourself before your plan starts covering costs — so that part of this visit is yours`
+    );
+  }
+  if (estimate.coinsuranceCents > 0 && estimate.coinsuranceRate !== null) {
+    parts.push(
+      `after that, your plan covers most of the rest and you pay ${Math.round(estimate.coinsuranceRate * 100)}% of what is left, which comes to ${formatDollars(estimate.coinsuranceCents)}`
+    );
+  }
+  if (estimate.copayCents > 0) {
+    parts.push(
+      `your deductible is already met, so you owe a flat ${formatDollars(estimate.copayCents)} copay`
+    );
+  }
+
+  const body = parts.length
+    ? `${parts.join(", and ")}. `
+    : `Your plan covers ${formatDollars(estimate.insurancePaysCents)} of the ${formatDollars(estimate.allowedAmountCents)} cost. `;
+
+  return `${body}That puts your share at about ${you}, likely between ${formatDollars(estimate.lowCents)} and ${formatDollars(estimate.highCents)}. This is an estimate, not a bill — it changes if anything extra is done during the visit, like lab work or a biopsy.`;
+}
+
+/**
+ * Explain a computed cost estimate in plain English, or answer a follow-up
+ * question about it. The model receives the finished breakdown and may only
+ * describe it — it never calculates, and every number it is permitted to use is
+ * listed in costFacts() above.
+ *
+ * Falls back to scriptedCostExplanation() on any failure, so the panel works
+ * with the model off (doc section 10 fallback ladder).
+ */
+export async function explainCost({
+  estimate,
+  question,
+}: {
+  estimate: CostEstimate;
+  question?: string;
+}): Promise<CostExplanation> {
+  const fallback: CostExplanation = {
+    text: scriptedCostExplanation(estimate),
+    source: "fixture",
+  };
+
+  if (!flags.useLiveLlm) return fallback;
+
+  const task = question?.trim()
+    ? `The patient asked: "${question.trim()}"
+
+Answer that question using only the breakdown above. If the answer is not in the
+breakdown, say plainly that you do not have that detail and suggest they ask the
+clinic. Do not speculate.`
+    : `Explain in plain English what this patient will pay and why.`;
+
+  try {
+    const result = await generateText({
+      model: flags.llmModel,
+      system: COST_EXPLAINER_PROMPT,
+      maxRetries: 0,
+      timeout: COST_TIMEOUT_MS,
+      prompt: `Cost breakdown (the only numbers you may state):
+${costFacts(estimate)}
+
+${task}`,
+    });
+
+    const text = result.text.trim();
+    if (!text || wordCount(text) > MAX_COST_WORDS) {
+      console.warn("[llm] cost explanation rejected, using scripted copy", {
+        words: wordCount(text),
+      });
+      return fallback;
+    }
+    return { text, source: "live" };
+  } catch (error) {
+    console.warn("[llm] cost explanation failed, using scripted copy", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return fallback;
   }
 }
 

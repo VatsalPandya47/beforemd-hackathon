@@ -1,5 +1,6 @@
 import type {
   ClinicalDraft,
+  ContractedRate,
   CoverageSummary,
   PatientContext,
   PatientRequest,
@@ -107,13 +108,55 @@ export const demoVisitHistory: VisitHistory = {
 // exist. An empty list renders as the empty state, which is the truth.
 export const demoPatientRequests: PatientRequest[] = [];
 
+// A deductible-and-coinsurance plan, deliberately: with the deductible met and
+// a flat copay there is nothing to explain, and the deductible branch of the
+// estimate would never run in the demo. copayEstimateCents is null because this
+// plan does not also charge a specialist copay — carrying both would make
+// "what do I owe" ambiguous.
 export const demoCoverageSummary: CoverageSummary = {
   active: true,
   planName: "Synthetic PPO Plan",
   network: "in-network",
-  copayEstimateCents: 3000,
-  deductibleRemainingCents: 0,
+  copayEstimateCents: null,
+  deductibleRemainingCents: 5000,
+  coinsuranceRate: 0.2,
 };
+
+// The one mocked input in the cost estimate. A 271 carries benefits, never
+// negotiated rates — those live in provider contracts and historical
+// reimbursement — so this is a stand-in, and `basis` says so on screen rather
+// than letting it read as payer data.
+//
+// Keyed by the lowercased Appointment.serviceType / description; DEFAULT_RATE
+// covers anything unseeded.
+export const demoContractedRates: Record<string, ContractedRate> = {
+  dermatology: {
+    description: "Dermatology consultation",
+    allowedAmountCents: 15000,
+    basis: "Contracted in-network rate for a 30-minute specialist consultation",
+  },
+  "primary care": {
+    description: "Primary care office visit",
+    allowedAmountCents: 11000,
+    basis: "Contracted in-network rate for an established-patient office visit",
+  },
+};
+
+export const DEFAULT_CONTRACTED_RATE: ContractedRate = {
+  description: "Office visit",
+  allowedAmountCents: 12000,
+  basis: "Average contracted in-network rate for an office visit",
+};
+
+/** Match a visit description to a rate. Substring, so "Dermatology consultation
+ *  - recurring rash" still finds the dermatology rate. */
+export function contractedRateFor(description: string | null): ContractedRate {
+  const haystack = (description ?? "").toLowerCase();
+  for (const [key, rate] of Object.entries(demoContractedRates)) {
+    if (haystack.includes(key)) return rate;
+  }
+  return DEFAULT_CONTRACTED_RATE;
+}
 
 export const demoClinicalDraft: ClinicalDraft = {
   sessionId: "DEMO_SESSION",
