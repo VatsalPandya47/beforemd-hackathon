@@ -13,6 +13,11 @@ export const flags = {
   useLiveDeepgram: readBool(process.env.USE_LIVE_DEEPGRAM, false),
   useLiveMoss: readBool(process.env.USE_LIVE_MOSS, false),
   useLiveStedi: readBool(process.env.USE_LIVE_STEDI, false),
+  // Defaults true, unlike the sponsor flags: a missing gateway token makes the
+  // call throw, and llm.ts already falls back to scripted copy on any failure.
+  // Set USE_LIVE_LLM=false to force the scripted path as a demo kill switch.
+  useLiveLlm: readBool(process.env.USE_LIVE_LLM, true),
+  llmModel: process.env.LLM_MODEL ?? "openai/gpt-5-nano",
 };
 
 export const demoIds = {

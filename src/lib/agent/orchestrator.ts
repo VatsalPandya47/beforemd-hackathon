@@ -1,9 +1,17 @@
 import { checkSafetyRedFlags, ESCALATION_MESSAGE, hasActiveRedFlag } from "@/lib/agent/safety";
+import { generateDraft, generateQuestion } from "@/lib/agent/llm";
 import { getPatientContext } from "@/lib/integrations/medplum";
 import { retrieve } from "@/lib/integrations/moss";
 import { checkEligibility } from "@/lib/integrations/stedi";
 import { demoIds } from "@/lib/flags";
-import type { AgentEvent, AgentState, AgentTurnResult, ClinicalDraft } from "@/types";
+import type {
+  AgentEvent,
+  AgentState,
+  AgentTurnResult,
+  ClinicalDraft,
+  PatientContext,
+  TranscriptEvent,
+} from "@/types";
 
 // Deterministic state machine from doc section 7:
 // CONSENT -> LOAD_HISTORY -> OPENING_QUESTION -> IDENTIFY_GAP ->
@@ -11,10 +19,14 @@ import type { AgentEvent, AgentState, AgentTurnResult, ClinicalDraft } from "@/t
 // BUILD_TIMELINE -> CHECK_ELIGIBILITY -> GENERATE_DRAFT ->
 // PATIENT_CONFIRMATION -> CLINICIAN_REVIEW_READY
 //
-// Deliberately deterministic after the first two questions (doc section 3) —
-// the LLM chooses wording, never the next state. Wire the actual LLM call in
-// nextQuestionForGap once LLM_API_KEY is available; until then this returns
-// scripted copy matching the doc's demo conversation.
+// Deliberately deterministic after the first two questions (doc section 3).
+// The LLM (lib/agent/llm.ts) only rephrases the question this state machine has
+// already chosen, and fills the structured draft. It never picks the next
+// state. Consent, escalation, and the "no diagnosis" disclaimer stay verbatim
+// below — the model never generates safety or consent copy.
+//
+// SCRIPTED_QUESTIONS are the intents handed to the LLM and the fallback spoken
+// aloud whenever the model errors, times out, or overruns the word cap.
 
 export const STATE_ORDER: AgentState[] = [
   "CONSENT",
@@ -56,12 +68,25 @@ function toolEvent(
   };
 }
 
+// One distinct intent per state, following the scripted conversation in doc
+// section 2. These three states previously shared a single hard-coded question,
+// which asked the patient the same thing three turns in a row.
+const SCRIPTED_QUESTIONS = {
+  opening: "What would you most like your doctor to understand today?",
+  OPENING_QUESTION:
+    "I can see lamotrigine was started five weeks ago. Did the rash begin before or after you started it?",
+  IDENTIFY_GAP: "Did it improve when you stopped or paused the medication?",
+  ASK_ADAPTIVE_QUESTION:
+    "Are you having trouble breathing, swelling of the face or mouth, fever, or sores in your mouth?",
+} as const;
+
 export async function runAgentTurn(
   sessionId: string,
   patientFhirId: string,
   currentState: AgentState,
   utterance: string,
-  draft: ClinicalDraft
+  draft: ClinicalDraft,
+  transcript: TranscriptEvent[] = []
 ): Promise<AgentTurnResult> {
   const toolEvents: AgentEvent[] = [];
   let sequenceNo = 0;
@@ -71,6 +96,13 @@ export async function runAgentTurn(
     title: string,
     payload?: Record<string, unknown>
   ) => toolEvents.push(toolEvent(sessionId, sequenceNo++, eventType, toolName, title, payload));
+
+  // Chart context grounds the model so it can only reference real FHIR facts.
+  // Adapter-level fixture fallback means this stays cheap when Medplum is off.
+  const loadContext = async (): Promise<PatientContext | null> => {
+    const result = await getPatientContext(patientFhirId);
+    return result.data ?? null;
+  };
 
   switch (currentState) {
     case "CONSENT":
@@ -88,8 +120,14 @@ export async function runAgentTurn(
       emit("tool_completed", "get_patient_context", "Reviewed medication and visit history", {
         source: context.source,
       });
+      const opening = await generateQuestion({
+        intent: SCRIPTED_QUESTIONS.opening,
+        utterance,
+        patientContext: context.data ?? null,
+        transcript,
+      });
       return {
-        reply: "What would you most like your doctor to understand today?",
+        reply: opening.text,
         nextState: nextState(currentState),
         toolEvents,
         draftPatch: context.data
@@ -101,6 +139,8 @@ export async function runAgentTurn(
     case "OPENING_QUESTION":
     case "IDENTIFY_GAP":
     case "ASK_ADAPTIVE_QUESTION": {
+      // Deterministic screen runs before any model call, and its escalation
+      // copy is returned verbatim — the LLM never sees a red-flag turn.
       const safetyFlags = checkSafetyRedFlags(utterance, draft.safetyFlags);
       if (hasActiveRedFlag(safetyFlags)) {
         emit("safety_flag", "check_safety_red_flags", "Urgent red flag detected", {
@@ -113,8 +153,14 @@ export async function runAgentTurn(
           draftPatch: { safetyFlags },
         };
       }
+      const question = await generateQuestion({
+        intent: SCRIPTED_QUESTIONS[currentState],
+        utterance,
+        patientContext: await loadContext(),
+        transcript,
+      });
       return {
-        reply: "Did the rash begin before or after you started lamotrigine?",
+        reply: question.text,
         nextState: nextState(currentState),
         toolEvents,
         draftPatch: { safetyFlags },
@@ -180,15 +226,43 @@ export async function runAgentTurn(
       };
     }
 
-    case "GENERATE_DRAFT":
+    case "GENERATE_DRAFT": {
       emit("tool_started", "create_clinician_draft", "Preparing the clinician review");
-      emit("tool_completed", "create_clinician_draft", "Prepared the clinician review");
+      const generated = await generateDraft({
+        patientContext: await loadContext(),
+        transcript,
+        currentDraft: draft,
+      });
+      emit("tool_completed", "create_clinician_draft", "Prepared the clinician review", {
+        source: generated.source,
+      });
+
+      // Safety flags come from the deterministic screen, never the model.
+      const safetyFlags = checkSafetyRedFlags(utterance, draft.safetyFlags);
+
+      if (generated.draft.keyConnection) {
+        emit("insight", "build_timeline", generated.draft.keyConnection.statement, {
+          confidence: generated.draft.keyConnection.confidence,
+          evidenceSourceIds: generated.draft.keyConnection.evidenceSourceIds,
+        });
+      }
+
       return {
         reply: "I've prepared a draft for your clinician to review.",
         nextState: nextState(currentState),
         toolEvents,
-        draftPatch: null,
+        draftPatch: {
+          chiefConcern: generated.draft.chiefConcern,
+          historyOfPresentIllness: generated.draft.historyOfPresentIllness,
+          timeline: generated.draft.timeline,
+          keyConnection: generated.draft.keyConnection,
+          unresolvedQuestions: generated.draft.unresolvedQuestions,
+          clinicianReviewNotes: generated.draft.clinicianReviewNotes,
+          patientFriendlySummary: generated.draft.patientFriendlySummary,
+          safetyFlags,
+        },
       };
+    }
 
     case "PATIENT_CONFIRMATION":
       return {

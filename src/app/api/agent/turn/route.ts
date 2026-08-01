@@ -3,7 +3,7 @@ import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { runAgentTurn, STATE_ORDER } from "@/lib/agent/orchestrator";
 import { demoClinicalDraft } from "@/lib/demo-fixtures";
-import type { AgentState, ClinicalDraft } from "@/types";
+import type { AgentState, ClinicalDraft, TranscriptEvent } from "@/types";
 
 const AgentTurnSchema = z.object({
   sessionId: z.string().uuid(),
@@ -42,7 +42,7 @@ export async function POST(request: NextRequest) {
         historyOfPresentIllness: draftRow.hpi ?? demoClinicalDraft.historyOfPresentIllness,
         timeline: draftRow.timeline ?? [],
         safetyFlags: draftRow.red_flags ?? [],
-        keyConnection: null,
+        keyConnection: draftRow.key_connection ?? null,
         unresolvedQuestions: draftRow.unresolved_questions ?? [],
         clinicianReviewNotes: draftRow.assessment_support ?? [],
         patientFriendlySummary: draftRow.patient_summary ?? "",
@@ -51,15 +51,30 @@ export async function POST(request: NextRequest) {
       }
     : { ...demoClinicalDraft, sessionId };
 
-  const { data: lastEvent } = await supabase
+  // Recent turns give the agent conversational context. Fetched before the
+  // current utterance is inserted, so it holds prior turns only — the current
+  // one is passed to runAgentTurn separately.
+  const { data: recentEvents } = await supabase
     .from("transcript_events")
-    .select("sequence_no")
+    .select("id, speaker, text, is_final, sequence_no, created_at")
     .eq("session_id", sessionId)
     .order("sequence_no", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .limit(20);
 
-  let sequenceNo = (lastEvent?.sequence_no ?? -1) + 1;
+  const priorTranscript: TranscriptEvent[] = (recentEvents ?? [])
+    .slice()
+    .reverse()
+    .map((row) => ({
+      id: row.id,
+      sessionId,
+      speaker: row.speaker as TranscriptEvent["speaker"],
+      text: row.text,
+      isFinal: row.is_final,
+      sequenceNo: row.sequence_no,
+      createdAt: row.created_at,
+    }));
+
+  let sequenceNo = (recentEvents?.[0]?.sequence_no ?? -1) + 1;
 
   await supabase.from("transcript_events").insert({
     session_id: sessionId,
@@ -76,7 +91,8 @@ export async function POST(request: NextRequest) {
     session.patient_fhir_id,
     currentState,
     utterance,
-    draft
+    draft,
+    priorTranscript
   );
 
   await supabase.from("transcript_events").insert({
@@ -105,13 +121,14 @@ export async function POST(request: NextRequest) {
     .eq("id", sessionId);
 
   if (result.draftPatch) {
-    await supabase.from("clinical_drafts").upsert(
+    const { error: draftError } = await supabase.from("clinical_drafts").upsert(
       {
         session_id: sessionId,
         chief_concern: result.draftPatch.chiefConcern ?? draft.chiefConcern,
         hpi: result.draftPatch.historyOfPresentIllness ?? draft.historyOfPresentIllness,
         timeline: result.draftPatch.timeline ?? draft.timeline,
         red_flags: result.draftPatch.safetyFlags ?? draft.safetyFlags,
+        key_connection: result.draftPatch.keyConnection ?? draft.keyConnection,
         unresolved_questions: result.draftPatch.unresolvedQuestions ?? draft.unresolvedQuestions,
         assessment_support: result.draftPatch.clinicianReviewNotes ?? draft.clinicianReviewNotes,
         patient_summary: result.draftPatch.patientFriendlySummary ?? draft.patientFriendlySummary,
@@ -119,6 +136,17 @@ export async function POST(request: NextRequest) {
       },
       { onConflict: "session_id" }
     );
+
+    // The turn still succeeds — the agent reply matters more than the write
+    // during a live demo — but a dropped draft must never be silent. A missing
+    // column here means a migration has not been applied to this database.
+    if (draftError) {
+      console.error("[agent/turn] clinical_drafts upsert failed", {
+        sessionId,
+        code: draftError.code,
+        message: draftError.message,
+      });
+    }
   }
 
   return NextResponse.json({
