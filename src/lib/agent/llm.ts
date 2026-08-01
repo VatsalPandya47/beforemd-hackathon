@@ -18,12 +18,14 @@ import type { ClinicalDraft, PatientContext, TranscriptEvent } from "@/types";
 const QUESTION_TIMEOUT_MS = 8_000;
 
 // The structured draft is a far bigger generation than a question — nine
-// fields, several of them arrays — and it is slow. Measured against the live
-// gateway on openai/gpt-5-nano: a valid draft came back in 26.7s. The previous
-// 20s budget was below that, so every draft attempt was killed by our own
-// timeout and the fallback fixture was served instead. The draft had literally
-// never succeeded in this app for that reason, independent of rate limiting.
-const DRAFT_TIMEOUT_MS = 40_000;
+// fields, several of them arrays. At the model's default reasoning effort it
+// took 26.7s against the live gateway, over the 20s budget this once had, so
+// every attempt was killed by our own timeout and the fixture served instead.
+// The draft had never once succeeded here for that reason, independent of rate
+// limiting. At reasoningEffort "low" it lands in ~8.7s; this ceiling leaves
+// roughly 3x headroom for a slow gateway without parking the demo on a dead
+// turn if the call is never coming back.
+const DRAFT_TIMEOUT_MS = 30_000;
 
 // Doc section 7 rule 9 caps spoken replies at 35 words. Allow a small grace
 // margin, then fall back rather than speak a rambling line during the demo.
@@ -192,6 +194,8 @@ Produce the structured clinician draft. Requirements:
 - keyConnection states a timing relationship only if the dates support it, with
   an honest confidence and the sourceIds it rests on. Use null if unsupported.
 - unresolvedQuestions are what the clinician still needs to ask.
+- clinicianReviewNotes are what the reviewing clinician should check before the
+  visit — what this draft rests on and where it is uncertain. Never empty.
 - patientFriendlySummary is plain language, no diagnosis, and says the clinician
   will review this.
 - Do not diagnose, do not recommend stopping or changing any medication.`;
@@ -209,6 +213,13 @@ Produce the structured clinician draft. Requirements:
           name: "clinical_draft",
           description: "Structured pre-visit draft for clinician review.",
         }),
+        // gpt-5-nano spends most of its time reasoning, and this is an
+        // extraction task rather than a reasoning one — the clinical judgement
+        // is deliberately left to the reviewing clinician. Measured on the same
+        // prompt: default 26.7s, low 8.7s, minimal 3.9s. "minimal" is fastest
+        // but returns empty unresolvedQuestions, which is a rendered section of
+        // the clinician brief, so "low" is the useful floor.
+        providerOptions: { openai: { reasoningEffort: "low" } },
       });
 
       const parsed = ClinicalDraftSchema.safeParse(result.output);
