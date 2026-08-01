@@ -15,9 +15,29 @@
 
 Each sponsor integration has a `USE_LIVE_<NAME>` flag and `ALLOW_FIXTURE_FALLBACK` — every key should be tested live, or the fixture fallback confirmed working, before the demo.
 
+## Account status (as of 2026-07-31)
+
+All five accounts are created and credentials are verified live (values are in `.env.local` / Vercel project env, not committed):
+
+- **Medplum** — project "BeforeMD" created, default client application credentials confirmed via `startClientLogin` + a live `Patient` search (0 results — no synthetic data seeded yet, see issue #7).
+- **Deepgram** — account created, key confirmed via `manage.v1.projects.list()`.
+- **Stedi** — clearinghouse account created (sandbox/test mode only on the free tier), key confirmed with a full mock 271 eligibility response. Working test payload:
+  ```json
+  {
+    "controlNumber": "123456789",
+    "tradingPartnerServiceId": "60054",
+    "provider": { "organizationName": "BeforeMD", "npi": "1999999984" },
+    "subscriber": { "firstName": "Jane", "lastName": "Doe", "memberId": "AETNA12345" },
+    "encounter": { "serviceTypeCodes": ["30"] }
+  }
+  ```
+  POST to `https://healthcare.us.stedi.com/2024-04-01/change/medicalnetwork/eligibility/v3` with header `Authorization: <STEDI_API_KEY>` (no `Bearer` prefix). Returns a real mock 271 with active coverage, benefits, and copay/deductible data for Aetna (payer ID `60054`).
+- **Moss** — project "beforemd-hackathon" created (`MOSS_PROJECT_ID`, `MOSS_PROJECT_KEY` in env). Real API confirmed via `POST https://service.usemoss.dev/v1/manage` with headers `x-project-key: <MOSS_PROJECT_KEY>`, `x-service-version: v1`, and `{"projectId": "...", "action": "validateCredentials"}` in the body → `{"valid":true,...}`. Supported actions per the API's own error response: `validateCredentials, initUpload, startBuild, getJobStatus, addDocs, deleteDocs, pushLocalIndex, telemetry, reportUsage, getIndex, listIndexes, deleteIndex, getDocs, getIndexUrl` — no dedicated retrieval/search action was in that list, so the actual query-time retrieval call still needs to be found (check the TypeScript SDK `@inferedge/moss` or `docs.moss.dev` for the query API) before wiring `src/lib/integrations/moss.ts` (issue #12).
+- **LLM** — no signup needed. Vercel AI Gateway via the `VERCEL_OIDC_TOKEN` already pulled from the Supabase provisioning step. `openai/gpt-5-nano` and `google/gemini-2.5-flash-lite` both work on the free tier; several larger models (e.g. `anthropic/claude-haiku-4.5`) 403 until paid credits are added.
+
 ## Moss uncertainty plan
 
-Confirm Moss API access and documentation at sponsor check-in. `src/lib/integrations/moss.ts` is built fixture-first — only its internals should change once credentials and endpoint details are confirmed. The rest of the product must not depend on Moss-specific response shapes; callers only ever see `RetrievedContext[]`.
+`src/lib/integrations/moss.ts` is built fixture-first — only its internals should change once the retrieval endpoint shape is confirmed (the management API above is confirmed; the query/search endpoint is not — see Account status above). The rest of the product must not depend on Moss-specific response shapes; callers only ever see `RetrievedContext[]`.
 
 ## Judge-specific reasons to care
 
