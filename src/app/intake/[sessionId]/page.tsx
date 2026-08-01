@@ -303,15 +303,33 @@ export default function IntakePage() {
         {/* Replay drives the state machine from committed events rather than
             through it, so it never reaches CLINICIAN_REVIEW_READY and never
             navigates on its own. The handoff is explicit instead — on stage the
-            operator decides when to move to the clinician screen. */}
-        {replay.phase === "done" && (
-          <Button
-            className="self-center"
-            onClick={() => router.push(`/clinician/${params.sessionId}`)}
-          >
-            Continue to clinician review
-          </Button>
-        )}
+            operator decides when to move to the clinician screen.
+
+            It is offered only after a fixture replay, because only then is it
+            truthful: `demoReplayTurns` is the conversation that produced
+            `demoClinicalDraft`, so the brief on the next screen really is the
+            one this replay just played. After replaying a *recorded* session
+            the two are unrelated — `clinician/[sessionId]/page.tsx` renders
+            `demoClinicalDraft` with the session id swapped in and never loads
+            that session's draft — so sending the operator onward would invite
+            approving a record that does not match what they just watched.
+            Withholding the button is the narrow fix; the page loading its own
+            draft is the real one, and it is not replay's to make. */}
+        {replay.phase === "done" &&
+          (replay.source === "fixture" ? (
+            <Button
+              className="self-center"
+              onClick={() => router.push(`/clinician/${params.sessionId}`)}
+            >
+              Continue to clinician review
+            </Button>
+          ) : (
+            <p className="text-center text-sm text-muted-foreground">
+              Replay finished. The clinician review screen still shows the scripted demo draft
+              rather than this session&apos;s, so it is not linked from here — that draft would
+              not match the conversation above.
+            </p>
+          ))}
 
         <div className="flex gap-2">
           <Textarea
