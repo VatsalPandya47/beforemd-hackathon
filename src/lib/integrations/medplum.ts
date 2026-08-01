@@ -32,6 +32,15 @@ async function ensureAuth(): Promise<void> {
   await getClient().startClientLogin(clientId, clientSecret);
 }
 
+// The evidence chip behind each timeline point shows this snippet, so it has to
+// survive the live path too — not just the fixture. Seeded as an inline base64
+// text/plain attachment by scripts/seed-medplum.mjs.
+function readInlineText(doc: DocumentReference): string | null {
+  const attachment = doc.content?.find((c) => c.attachment?.data)?.attachment;
+  if (!attachment?.data) return null;
+  return Buffer.from(attachment.data, "base64").toString("utf-8").trim() || null;
+}
+
 // Medplum is the clinical source of truth; Supabase never duplicates the full
 // FHIR record (see doc section 3 architecture boundary).
 export async function getPatientContext(
@@ -88,7 +97,7 @@ export async function getPatientContext(
         fhirId: d.id ?? "",
         title: d.description ?? d.type?.text ?? "Untitled document",
         date: d.date ?? null,
-        excerpt: null,
+        excerpt: readInlineText(d),
       })),
     };
 
