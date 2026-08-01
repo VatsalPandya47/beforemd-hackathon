@@ -224,6 +224,71 @@ export type CoverageSummary = {
   network: "in-network" | "out-of-network" | "unknown";
   copayEstimateCents: number | null;
   deductibleRemainingCents: number | null;
+  // Fraction the patient owes after the deductible, 0-1. EB01 code "A" in the
+  // 271, alongside the "B" (copay) and "C" (deductible) already parsed above.
+  coinsuranceRate: number | null;
+};
+
+// --- Cost estimate ---
+
+// What a visit costs before insurance. A 271 never carries this: negotiated
+// rates come from provider contracts and historical reimbursement, so it is the
+// one mocked input in the estimate and is labelled as such wherever it is shown.
+export type ContractedRate = {
+  description: string;
+  allowedAmountCents: number;
+  // Shown to the patient so the mocked input is never passed off as payer data.
+  basis: string;
+};
+
+export type CostEstimate = {
+  serviceDescription: string;
+  appointmentFhirId: string | null;
+  appointmentDate: string | null;
+
+  allowedAmountCents: number;
+  // Of the allowed amount, what each side owes. These three always sum to
+  // allowedAmountCents — the panel renders them as a balance sheet.
+  deductibleAppliedCents: number;
+  coinsuranceCents: number;
+  copayCents: number;
+  insurancePaysCents: number;
+  patientPaysCents: number;
+
+  // Band around patientPaysCents, not around the allowed amount: the patient's
+  // share is the only number they care about being wrong.
+  lowCents: number;
+  highCents: number;
+  confidence: "high" | "medium" | "low";
+  confidencePct: number;
+
+  planName: string;
+  network: CoverageSummary["network"];
+  deductibleRemainingCents: number | null;
+  coinsuranceRate: number | null;
+  rateBasis: string;
+
+  // Plain-language lines the panel lists verbatim. Deterministic, not generated.
+  assumptions: string[];
+  couldChange: string[];
+};
+
+export type CostEstimateResponse = {
+  estimate: CostEstimate;
+  coverage: CoverageSummary;
+  source: ToolSource;
+};
+
+export type CostExplanation = {
+  text: string;
+  source: LlmExplanationSource;
+};
+
+export type LlmExplanationSource = "live" | "fixture";
+
+export type SavedCostEstimate = {
+  claimFhirId: string;
+  patientPaysCents: number;
 };
 
 // --- Clinical draft (agent output) ---

@@ -1,13 +1,13 @@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { formatCents, formatPercent } from "@/lib/format-money";
 import type { CoverageSummary } from "@/types";
 
-function formatCents(cents: number | null): string {
-  if (cents === null) return "Unknown";
-  return `$${(cents / 100).toFixed(2)}`;
-}
-
 export function CoverageCard({ coverage }: { coverage: CoverageSummary }) {
+  // A plan charges a flat copay or a coinsurance percentage, not both. Showing
+  // the one that does not apply as "Unknown" reads as missing data rather than
+  // as inapplicable, so the tile switches to whichever the plan actually uses.
+  const usesCoinsurance = coverage.copayEstimateCents === null;
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
@@ -28,8 +28,14 @@ export function CoverageCard({ coverage }: { coverage: CoverageSummary }) {
           <p className="font-medium capitalize">{coverage.network}</p>
         </div>
         <div>
-          <p className="text-sm text-muted-foreground">Estimated copay</p>
-          <p className="font-medium">{formatCents(coverage.copayEstimateCents)}</p>
+          <p className="text-sm text-muted-foreground">
+            {usesCoinsurance ? "Coinsurance" : "Estimated copay"}
+          </p>
+          <p className="font-medium">
+            {usesCoinsurance
+              ? formatPercent(coverage.coinsuranceRate)
+              : formatCents(coverage.copayEstimateCents)}
+          </p>
         </div>
         <div>
           <p className="text-sm text-muted-foreground">Deductible remaining</p>

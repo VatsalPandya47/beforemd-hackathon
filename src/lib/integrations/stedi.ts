@@ -29,6 +29,7 @@ const OFFICE_VISIT_SERVICE_TYPE = "98";
 
 // Eligibility benefit codes from the 271 (EB01).
 const BENEFIT_ACTIVE = "1";
+const BENEFIT_COINSURANCE = "A";
 const BENEFIT_COPAY = "B";
 const BENEFIT_DEDUCTIBLE = "C";
 
@@ -37,6 +38,8 @@ type BenefitInformation = {
   name?: string;
   serviceTypeCodes?: string[];
   benefitAmount?: string | null;
+  // Coinsurance is a rate, not an amount, so the 271 carries it here instead.
+  benefitPercent?: string | null;
   timeQualifier?: string;
   inPlanNetworkIndicator?: string;
 };
@@ -61,6 +64,18 @@ function dollarsToCents(amount: string | null | undefined): number | null {
   if (!amount) return null;
   const value = Number.parseFloat(amount);
   return Number.isFinite(value) ? Math.round(value * 100) : null;
+}
+
+// Payers are inconsistent here: some send "0.2", others "20" for the same 20%.
+// Anything above 1 is read as a percentage. Out-of-range values are dropped
+// rather than clamped — a bad rate silently becoming 100% would quote the
+// patient the entire bill.
+function toCoinsuranceRate(percent: string | null | undefined): number | null {
+  if (!percent) return null;
+  const value = Number.parseFloat(percent);
+  if (!Number.isFinite(value) || value < 0) return null;
+  const rate = value > 1 ? value / 100 : value;
+  return rate >= 0 && rate <= 1 ? rate : null;
 }
 
 function nineDigitControlNumber(): string {
@@ -108,6 +123,23 @@ export function normalizeEligibility(
       coversRelevantService(benefit)
   );
 
+  // Same in-network / office-visit preference as the copay lookup above: an
+  // out-of-network coinsurance rate is typically far higher, and applying one to
+  // an in-network visit would overstate what the patient owes.
+  const coinsuranceBenefit =
+    benefits.find(
+      (benefit) =>
+        benefit.code === BENEFIT_COINSURANCE &&
+        isInNetwork(benefit) &&
+        (benefit.serviceTypeCodes ?? []).includes(OFFICE_VISIT_SERVICE_TYPE)
+    ) ??
+    benefits.find(
+      (benefit) =>
+        benefit.code === BENEFIT_COINSURANCE &&
+        isInNetwork(benefit) &&
+        coversRelevantService(benefit)
+    );
+
   // A 271 describes the plan's benefit tiers, not whether one specific clinic
   // participates. In-network benefits existing for this service is the
   // strongest claim the data supports.
@@ -124,6 +156,7 @@ export function normalizeEligibility(
     network: hasInNetworkBenefits ? "in-network" : "unknown",
     copayEstimateCents: dollarsToCents(copayBenefit?.benefitAmount),
     deductibleRemainingCents: dollarsToCents(deductibleBenefit?.benefitAmount),
+    coinsuranceRate: toCoinsuranceRate(coinsuranceBenefit?.benefitPercent),
   };
 }
 
