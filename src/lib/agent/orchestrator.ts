@@ -86,6 +86,17 @@ const SCRIPTED_QUESTIONS = {
     "Are you having trouble breathing, swelling of the face or mouth, fever, or sores in your mouth?",
 } as const;
 
+// LLM call budget: the AI Gateway free tier throttles after a handful of calls
+// (rolling window, not a hard cap — see issue #47), and a full run needs 5-6
+// (4 questions + the draft's retry). Until credits land, only states in this
+// set get an LLM-rephrased question — everywhere else speaks the scripted
+// line verbatim. GENERATE_DRAFT always calls the model regardless of this
+// set; the draft is the call that actually needs to land.
+//
+// Restore the full adaptive experience in one line: add "LOAD_HISTORY",
+// "IDENTIFY_GAP", and "ASK_ADAPTIVE_QUESTION" back to this set.
+const LLM_QUESTION_STATES = new Set<AgentState>(["OPENING_QUESTION"]);
+
 export async function runAgentTurn(
   sessionId: string,
   patientFhirId: string,
@@ -126,12 +137,14 @@ export async function runAgentTurn(
       emit("tool_completed", "get_patient_context", "Reviewed medication and visit history", {
         source: context.source,
       });
-      const opening = await generateQuestion({
-        intent: SCRIPTED_QUESTIONS.opening,
-        utterance,
-        patientContext: context.data ?? null,
-        transcript,
-      });
+      const opening = LLM_QUESTION_STATES.has(currentState)
+        ? await generateQuestion({
+            intent: SCRIPTED_QUESTIONS.opening,
+            utterance,
+            patientContext: context.data ?? null,
+            transcript,
+          })
+        : { text: SCRIPTED_QUESTIONS.opening, source: "fixture" as const };
       return {
         reply: opening.text,
         nextState: nextState(currentState),
@@ -159,12 +172,14 @@ export async function runAgentTurn(
           draftPatch: { safetyFlags },
         };
       }
-      const question = await generateQuestion({
-        intent: SCRIPTED_QUESTIONS[currentState],
-        utterance,
-        patientContext: await loadContext(),
-        transcript,
-      });
+      const question = LLM_QUESTION_STATES.has(currentState)
+        ? await generateQuestion({
+            intent: SCRIPTED_QUESTIONS[currentState],
+            utterance,
+            patientContext: await loadContext(),
+            transcript,
+          })
+        : { text: SCRIPTED_QUESTIONS[currentState], source: "fixture" as const };
       return {
         reply: question.text,
         nextState: nextState(currentState),
