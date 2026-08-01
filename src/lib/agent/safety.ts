@@ -84,26 +84,73 @@ function normalize(utterance: string): string {
   return utterance.toLowerCase().replace(/['’]/g, "");
 }
 
+// Text that can sit between two symptoms and still be one negated list:
+// "no fever or blistering", "no fever, swelling, or sores". Anything with a
+// real word in it ends the denial's reach.
+const LIST_GLUE = /^[\s,]*(or|nor|and)?[\s,]*$/;
+
+type SymptomHit = { flag: SafetyRedFlag; start: number; end: number };
+
+function findHits(text: string): SymptomHit[] {
+  const hits: SymptomHit[] = [];
+  for (const flag of SAFETY_RED_FLAGS) {
+    for (const pattern of RED_FLAG_PATTERNS[flag]) {
+      const scanner = new RegExp(pattern.source, "g");
+      let match: RegExpExecArray | null;
+      while ((match = scanner.exec(text)) !== null) {
+        hits.push({ flag, start: match.index, end: match.index + match[0].length });
+        if (match[0].length === 0) scanner.lastIndex++;
+      }
+    }
+  }
+  return hits.sort((a, b) => a.start - b.start || b.end - a.end);
+}
+
 /**
- * True when the clause preceding a match contains a negation cue.
+ * Decide present/absent per symptom mentioned in one utterance.
  *
- * "and" splits clauses as well as punctuation, otherwise a cue attached to an
- * earlier symptom leaks onto a later one: in "I cant breathe and my face is
- * swelling", the "cant" belongs to breathing and would wrongly mark the
- * swelling absent. Splitting there can only lose a shared negation ("no fever
- * and swelling"), which fails toward escalating — the safe direction for a
- * screen whose job is to catch emergencies.
+ * A denial binds to the *next* symptom mentioned and is spent there, rather
+ * than covering everything up to the next punctuation mark. Scoping by
+ * punctuation meant any connector we had not enumerated let an earlier denial
+ * swallow a later, real symptom: "no fever um Im having trouble breathing"
+ * scored breathing as absent. That matters because the input is Deepgram
+ * transcription, which frequently arrives with no punctuation at all.
+ *
+ * A denial carries past a symptom only when nothing but list glue separates
+ * them, so "no fever or blistering" denies both while "no fever my face is
+ * swelling" denies only the fever.
+ *
+ * A cue sitting at the very start of a match is part of the symptom, not a
+ * denial of it — "cant breathe" is a report, not a denial of breathing.
  */
-function isNegated(text: string, matchIndex: number): boolean {
-  const boundary = Math.max(
-    text.lastIndexOf(",", matchIndex),
-    text.lastIndexOf(".", matchIndex),
-    text.lastIndexOf(";", matchIndex),
-    text.lastIndexOf(" but ", matchIndex),
-    text.lastIndexOf(" and ", matchIndex)
-  );
-  const clauseStart = boundary === -1 ? 0 : boundary + 1;
-  return NEGATION_CUE.test(text.slice(clauseStart, matchIndex));
+function scoreHits(text: string): Map<SafetyRedFlag, SafetyFlagStatus> {
+  const cueScanner = new RegExp(NEGATION_CUE.source, "g");
+  const cueIndices: number[] = [];
+  let cue: RegExpExecArray | null;
+  while ((cue = cueScanner.exec(text)) !== null) cueIndices.push(cue.index);
+
+  const scored = new Map<SafetyRedFlag, SafetyFlagStatus>();
+  let previousEnd = 0;
+  let denialCarries: boolean = false;
+
+  for (const hit of findHits(text)) {
+    // Overlapping matches of the same phrase — already accounted for.
+    if (hit.start < previousEnd) continue;
+
+    const gap = text.slice(previousEnd, hit.start);
+    const cueInGap = cueIndices.some((index) => index >= previousEnd && index < hit.start);
+    const negated: boolean = cueInGap || (denialCarries && LIST_GLUE.test(gap));
+
+    // A reported symptom outranks a denial of the same one elsewhere.
+    if (scored.get(hit.flag) !== "present") {
+      scored.set(hit.flag, negated ? "absent" : "present");
+    }
+
+    denialCarries = negated;
+    previousEnd = hit.end;
+  }
+
+  return scored;
 }
 
 /**
@@ -127,6 +174,7 @@ export function checkSafetyRedFlags(
 ): SafetyFlag[] {
   const text = normalize(utterance);
   const prior = new Map(priorFlags.map((flag) => [flag.name, flag.status]));
+  const scored = scoreHits(text);
 
   return SAFETY_RED_FLAGS.map((name) => {
     const previous = prior.get(name) ?? "unknown";
@@ -134,21 +182,7 @@ export function checkSafetyRedFlags(
     // A red flag once reported stays reported. Only a clinician clears it.
     if (previous === "present") return { name, status: "present" as SafetyFlagStatus };
 
-    let status: SafetyFlagStatus = previous;
-
-    for (const pattern of RED_FLAG_PATTERNS[name]) {
-      const match = pattern.exec(text);
-      if (!match) continue;
-
-      if (isNegated(text, match.index)) {
-        status = "absent";
-        continue;
-      }
-      status = "present";
-      break;
-    }
-
-    return { name, status };
+    return { name, status: scored.get(name) ?? previous };
   });
 }
 
