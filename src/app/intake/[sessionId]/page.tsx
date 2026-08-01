@@ -36,10 +36,25 @@ export default function IntakePage() {
   // reached through a ref rather than closed over.
   const voiceRef = useRef<UseVoiceSession | null>(null);
 
+  // Bumped whenever the live conversation is abandoned — today only by replay
+  // taking over. A turn captures the epoch it started in and drops its results
+  // if that no longer matches, because `await` means a turn can outlive the
+  // conversation it belongs to: without this, a reply that was in flight when
+  // replay started lands in the middle of the replayed transcript, and a turn
+  // that resolves to CLINICIAN_REVIEW_READY navigates away mid-replay.
+  const turnEpochRef = useRef(0);
+  const turnAbortRef = useRef<AbortController | null>(null);
+
   const runTurn = useCallback(
     async (text: string) => {
       const utterance = text.trim();
       if (!utterance) return;
+
+      const epoch = turnEpochRef.current;
+      const stale = () => turnEpochRef.current !== epoch;
+
+      const controller = new AbortController();
+      turnAbortRef.current = controller;
 
       setTurnError(null);
       setTranscript((prev) => [
@@ -61,6 +76,7 @@ export default function IntakePage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ sessionId: params.sessionId, utterance }),
+          signal: controller.signal,
         });
         if (!response.ok) throw new Error(`The agent turn failed (${response.status})`);
 
@@ -69,6 +85,10 @@ export default function IntakePage() {
           nextState: string;
           toolEvents?: AgentEvent[];
         };
+
+        // The turn is still committed server-side — only this screen stops
+        // caring, because replay now owns what is on it.
+        if (stale()) return;
 
         setTranscript((prev) => [
           ...prev,
@@ -90,15 +110,20 @@ export default function IntakePage() {
         // the reply is already on screen either way.
         await voiceRef.current?.speak(result.reply);
 
+        if (stale()) return;
+
         if (result.nextState === "CLINICIAN_REVIEW_READY") {
           voiceRef.current?.stop();
           setVoiceActive(false);
           router.push(`/clinician/${params.sessionId}`);
         }
       } catch (error) {
+        // An abort is this screen abandoning the turn, not a failure to report.
+        if (stale() || controller.signal.aborted) return;
         setTurnError(error instanceof Error ? error.message : "The agent turn failed");
       } finally {
-        setTurnPhase("idle");
+        if (!stale()) setTurnPhase("idle");
+        if (turnAbortRef.current === controller) turnAbortRef.current = null;
       }
     },
     [params.sessionId, router]
@@ -143,11 +168,23 @@ export default function IntakePage() {
   const [replayOrbState, setReplayOrbState] = useState<VoiceOrbState>("idle");
 
   const handleReplayBegin = useCallback(() => {
+    // Replay is reached for when the live path is already misbehaving, so it
+    // takes the screen rather than waiting its turn: retire any in-flight turn,
+    // drop utterances still queued behind it, and abort the request so it is
+    // not left running. Deliberately not gated on `turnPhase === "idle"` — a
+    // hung agent turn is the likeliest reason anyone presses this button, so
+    // that gate would disable replay exactly when it is needed.
+    turnEpochRef.current += 1;
+    turnAbortRef.current?.abort();
+    turnAbortRef.current = null;
+    queueRef.current = [];
+
     voiceRef.current?.stop();
     setVoiceActive(false);
     setTranscript([]);
     setAgentEvents([]);
     setTurnError(null);
+    setTurnPhase("idle");
     setNextState("CONSENT");
     setReplayOrbState("idle");
   }, []);
