@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { runAgentTurn, STATE_ORDER } from "@/lib/agent/orchestrator";
+import { initialSafetyFlags } from "@/lib/agent/safety";
 import { demoClinicalDraft } from "@/lib/demo-fixtures";
 import type { AgentState, ClinicalDraft, TranscriptEvent } from "@/types";
 
@@ -73,7 +74,10 @@ export async function POST(request: NextRequest) {
         coverageSummary: draftRow.coverage_summary ?? null,
         clinicianStatus: draftRow.clinician_status ?? "draft",
       }
-    : { ...demoClinicalDraft, sessionId };
+    : // A new session has screened nothing yet. Seeding from the fixture would
+      // start every flag at "absent", so the clinician brief would report the
+      // red-flag screen as answered before the patient had said a word.
+      { ...demoClinicalDraft, sessionId, safetyFlags: initialSafetyFlags() };
 
   // Recent turns give the agent conversational context. Fetched before the
   // current utterance is inserted, so it holds prior turns only — the current

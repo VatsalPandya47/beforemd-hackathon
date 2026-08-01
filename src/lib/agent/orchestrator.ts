@@ -1,4 +1,10 @@
-import { checkSafetyRedFlags, ESCALATION_MESSAGE, hasActiveRedFlag } from "@/lib/agent/safety";
+import {
+  applyBlanketDenial,
+  checkSafetyRedFlags,
+  ESCALATION_MESSAGE,
+  hasActiveRedFlag,
+  isBlanketDenial,
+} from "@/lib/agent/safety";
 import { generateDraft, generateQuestion } from "@/lib/agent/llm";
 import { getPatientContext } from "@/lib/integrations/medplum";
 import { retrieve } from "@/lib/integrations/moss";
@@ -196,7 +202,31 @@ export async function runAgentTurn(
 
     case "SAFETY_SCREEN": {
       emit("tool_started", "check_safety_red_flags", "Checking for urgent warning signs");
-      const safetyFlags = checkSafetyRedFlags(utterance, draft.safetyFlags);
+      const screened = checkSafetyRedFlags(utterance, draft.safetyFlags);
+      // This state asks one compound question covering every flag, so a plain
+      // "no" here denies all of them. Only valid in this state — a "no"
+      // elsewhere is answering something else.
+      // Never let a denial blank out flags in the same breath as a reported
+      // symptom — if anything scored present, take the scan as-is.
+      const safetyFlags =
+        isBlanketDenial(utterance) && !hasActiveRedFlag(screened)
+          ? applyBlanketDenial(screened)
+          : screened;
+
+      // The escalation branch belongs here too, not only in the question
+      // states: a patient can first report a red flag when directly asked.
+      if (hasActiveRedFlag(safetyFlags)) {
+        emit("safety_flag", "check_safety_red_flags", "Urgent red flag detected", {
+          flags: safetyFlags,
+        });
+        return {
+          reply: ESCALATION_MESSAGE,
+          nextState: "SAFETY_SCREEN",
+          toolEvents,
+          draftPatch: { safetyFlags },
+        };
+      }
+
       emit("tool_completed", "check_safety_red_flags", "Checked for urgent warning signs", {
         flags: safetyFlags,
       });
