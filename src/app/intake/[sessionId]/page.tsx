@@ -8,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { VoiceOrb, type VoiceOrbState } from "@/components/voice-orb";
 import { LiveTranscript } from "@/components/live-transcript";
 import { AgentActivity } from "@/components/agent-activity";
+import { HealthRecordSheet } from "@/components/patient-portal";
 import { useVoiceSession, type UseVoiceSession } from "@/lib/voice/use-voice-session";
 import { useReplaySession, type ReplayFrame } from "@/lib/replay/use-replay-session";
 import {
@@ -151,7 +152,10 @@ export default function IntakePage() {
         if (result.nextState === "CLINICIAN_REVIEW_READY") {
           voiceRef.current?.stop();
           setVoiceActive(false);
-          router.push(`/clinician/${params.sessionId}`);
+          // The patient's own record, not the clinician's brief. This used to
+          // hand the patient the clinician screen; that screen is now reached
+          // from a link there, or directly by the operator.
+          router.push(`/patient/${params.sessionId}`);
         }
       } catch (error) {
         // An abort is this screen abandoning the turn, not a failure to report.
@@ -326,13 +330,20 @@ export default function IntakePage() {
         {/* This screen had no title at all, which left the projector showing an
             unlabelled orb. The other two screens carry the same eyebrow-and-
             heading pair, so it reads as one product rather than three pages. */}
-        <div>
-          <p className="text-sm font-semibold tracking-[0.12em] text-primary uppercase">
-            BeforeMD
-          </p>
-          <h1 className="mt-1 text-3xl font-semibold tracking-tight text-slate-900">
-            Pre-visit intake
-          </h1>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-sm font-semibold tracking-[0.12em] text-primary uppercase">
+              BeforeMD
+            </p>
+            <h1 className="mt-1 text-3xl font-semibold tracking-tight text-slate-900">
+              Pre-visit intake
+            </h1>
+          </div>
+
+          {/* Before the conversation, not after it: the patient can see what
+              the clinic already has on file rather than being asked to recite
+              it. */}
+          <HealthRecordSheet sessionId={params.sessionId} />
         </div>
 
         <VoiceOrb state={orbState} level={voice.level} />
@@ -432,12 +443,26 @@ export default function IntakePage() {
             belonging to its own session id and labels where it came from, the
             handoff is truthful from either replay source. */}
         {replay.phase === "done" && (
-          <Button
-            className="h-12 self-center px-6 text-base"
-            onClick={() => router.push(`/clinician/${params.sessionId}`)}
-          >
-            Continue to clinician review
-          </Button>
+          <div className="flex justify-center gap-3">
+            {/* Both destinations, because a replayed run has to be able to show
+                either half of the product. The live path routes to the patient
+                portal on its own; replay never reaches that state, so without
+                this the portal is unreachable from a replayed demo. Sized for
+                the room, like the other handoff controls. */}
+            <Button
+              className="h-12 px-6 text-base"
+              onClick={() => router.push(`/patient/${params.sessionId}`)}
+            >
+              Continue to your record
+            </Button>
+            <Button
+              variant="outline"
+              className="h-12 px-6 text-base"
+              onClick={() => router.push(`/clinician/${params.sessionId}`)}
+            >
+              Clinician review
+            </Button>
+          </div>
         )}
 
         <div className="flex gap-2">
