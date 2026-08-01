@@ -12,5 +12,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: result.error }, { status: 502 });
   }
 
-  return NextResponse.json(result.data);
+  // ALLOW_FIXTURE_FALLBACK makes a live failure return ok:true with fixture data,
+  // so without `source` a 200 can't be trusted to mean Medplum actually answered.
+  return NextResponse.json({ ...result.data, source: result.source });
 }
