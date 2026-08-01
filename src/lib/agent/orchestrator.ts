@@ -2,7 +2,7 @@ import { checkSafetyRedFlags, ESCALATION_MESSAGE, hasActiveRedFlag } from "@/lib
 import { generateDraft, generateQuestion } from "@/lib/agent/llm";
 import { getPatientContext } from "@/lib/integrations/medplum";
 import { retrieve } from "@/lib/integrations/moss";
-import { checkEligibility } from "@/lib/integrations/stedi";
+import { checkEligibility, STEDI_DEMO_REQUEST } from "@/lib/integrations/stedi";
 import { demoIds } from "@/lib/flags";
 import type {
   AgentEvent,
@@ -211,9 +211,7 @@ export async function runAgentTurn(
       emit("tool_started", "check_eligibility", "Checking insurance benefits");
       const coverage = await checkEligibility({
         patientFhirId,
-        payerId: "DEMO_PAYER",
-        memberId: "DEMO_MEMBER",
-        serviceType: "30",
+        ...STEDI_DEMO_REQUEST,
       });
       emit("tool_completed", "check_eligibility", "Checked insurance benefits", {
         source: coverage.source,

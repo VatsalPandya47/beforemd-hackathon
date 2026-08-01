@@ -116,9 +116,14 @@ export type RetrievedContext = {
 
 export type EligibilityInput = {
   patientFhirId: string;
+  // Stedi calls this tradingPartnerServiceId — the payer's clearinghouse id.
   payerId: string;
   memberId: string;
   serviceType: string;
+  // The 271 is matched on subscriber name as well as member id. Optional so
+  // callers can rely on the adapter's synthetic demo defaults.
+  subscriberFirstName?: string;
+  subscriberLastName?: string;
 };
 
 export type CoverageSummary = {
