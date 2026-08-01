@@ -383,11 +383,7 @@ export default function IntakePage() {
         {replay.error && <p className="text-center text-sm text-red-600">{replay.error}</p>}
         {turnError && <p className="text-center text-sm text-red-600">{turnError}</p>}
 
-        {/* Framed so an empty transcript reads as "nothing said yet" rather than
-            as a blank half of the screen. */}
-        <div className="min-h-64 rounded-xl bg-white/70 p-5 ring-1 ring-slate-900/5">
-          <LiveTranscript events={transcript} interim={voice.interim} />
-        </div>
+        <LiveTranscript events={transcript} interim={voice.interim} />
 
         {/* Replay drives the state machine from committed events rather than
             through it, so it never reaches CLINICIAN_REVIEW_READY and never
