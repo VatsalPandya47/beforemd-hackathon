@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { format, parseISO } from "date-fns";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -193,16 +193,23 @@ export function HealthRecordSheet({ sessionId }: { sessionId: string }) {
   const [patient, setPatient] = useState<PatientContext | null>(null);
   const [isFixture, setIsFixture] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Guards the request, not the result: open/close/open before the first fetch
+  // settles would otherwise fire a second one.
+  const loading = useRef(false);
 
   // Loaded when the sheet is first opened rather than on mount: this screen's
   // job is the conversation, and it should not spend a Medplum round trip on a
   // panel most sessions never open. Fetched once, then cached in state.
   async function load() {
-    if (patient) return;
+    if (patient || loading.current) return;
+    loading.current = true;
     setError(null);
     try {
+      // section=health, not the full overview: this panel renders `patient` and
+      // nothing else, and it opens mid-voice-session. The full payload would
+      // also fetch visits, requests and the transcript, all discarded here.
       const response = await fetch(
-        `/api/patient/overview?sessionId=${encodeURIComponent(sessionId)}`
+        `/api/patient/overview?section=health&sessionId=${encodeURIComponent(sessionId)}`
       );
       const body = await response.json().catch(() => null);
       if (!response.ok) {
@@ -215,6 +222,8 @@ export function HealthRecordSheet({ sessionId }: { sessionId: string }) {
       setIsFixture(body.source !== "live");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not load your record");
+    } finally {
+      loading.current = false;
     }
   }
 
@@ -354,20 +363,25 @@ function ConversationsPanel({
         const isOpen = expanded === conversation.sessionId;
         return (
           <Card key={conversation.sessionId}>
-            <CardHeader
-              className="cursor-pointer"
+            {/* A real button, not a clickable CardHeader: the div version was
+                not focusable, not operable from the keyboard, and announced
+                nothing about being expandable. */}
+            <button
+              type="button"
+              aria-expanded={isOpen}
+              className="w-full cursor-pointer rounded-t-xl px-6 py-6 text-left focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
               onClick={() => setExpanded(isOpen ? null : conversation.sessionId)}
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <CardTitle className="text-base">
+                  <span className="font-heading block text-base font-medium text-foreground">
                     {conversation.chiefConcern ?? "Pre-visit conversation"}
-                  </CardTitle>
-                  <p className="mt-1 text-xs text-slate-500">
+                  </span>
+                  <span className="mt-1 block text-xs text-slate-500">
                     {formatDate(conversation.startedAt)} · {conversation.transcript.length}{" "}
                     messages
                     {conversation.sessionId === currentSessionId && " · this visit"}
-                  </p>
+                  </span>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   {conversation.mode === "replay" && (
@@ -376,7 +390,7 @@ function ConversationsPanel({
                   <Badge variant="outline">{conversation.status}</Badge>
                 </div>
               </div>
-            </CardHeader>
+            </button>
 
             {isOpen && (
               <CardContent>

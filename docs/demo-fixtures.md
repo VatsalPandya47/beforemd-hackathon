@@ -44,8 +44,17 @@ under past visits, and it is what makes "doctors you have seen" non-empty.
 
 Patient-request Tasks deliberately carry **no** demo identifier, so a reseed leaves them in place
 rather than deleting them. They accumulate across demo runs, the same way the clinician-review
-Tasks from `writeDraft` do. Harmless — nothing reads them except the patient portal, which finds
-them by `requester`.
+Tasks from `writeDraft` do. Nothing reads them except the patient portal, which finds them by
+`requester`.
+
+Two consequences worth knowing rather than discovering:
+
+- **A reseed leaves them pointing at a deleted Patient.** `requester` and `for` become dangling
+  references on the chart. Nothing in this app follows them — the portal searches by the *new*
+  patient id, so old Tasks simply stop appearing — but they are real broken references in the
+  Medplum project, not tidy orphans. Delete them by hand if a judge is going to browse the project.
+- **They are read one page at a time.** `listPatientRequests` passes `_sort=-authored-on` and
+  `_count=50`; past 50 accumulated requests the oldest stop appearing.
 
 ## Seed requirements
 

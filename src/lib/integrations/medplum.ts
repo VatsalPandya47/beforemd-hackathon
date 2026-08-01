@@ -36,13 +36,43 @@ function getClient(): MedplumClient {
   return client;
 }
 
+// startClientLogin does a full OAuth round trip on every call — measured at
+// ~200ms warm, and it does NOT short-circuit on a valid unexpired token. Every
+// read goes through withFixture -> ensureAuth, and the patient portal runs three
+// reads in Promise.all, so without memoising this each portal load spends ~500ms
+// re-fetching a token it already has.
+//
+// ponytail: fixed window rather than decoding the token's own expiry. Medplum
+// access tokens outlive this comfortably, re-login is cheap, and a token that
+// expires early surfaces as an ordinary request failure the fixture ladder
+// already handles.
+const AUTH_TTL_MS = 5 * 60_000;
+
+let authPromise: Promise<void> | null = null;
+let authExpiresAt = 0;
+
 async function ensureAuth(): Promise<void> {
   const clientId = process.env.MEDPLUM_CLIENT_ID;
   const clientSecret = process.env.MEDPLUM_CLIENT_SECRET;
   if (!clientId || !clientSecret) {
     throw new Error("Medplum client credentials are not configured");
   }
-  await getClient().startClientLogin(clientId, clientSecret);
+
+  // Concurrent callers share the in-flight login rather than racing three of them.
+  if (authPromise && Date.now() < authExpiresAt) return authPromise;
+
+  authExpiresAt = Date.now() + AUTH_TTL_MS;
+  authPromise = getClient()
+    .startClientLogin(clientId, clientSecret)
+    .then(() => undefined);
+
+  // A failed login must not stay cached, or every later read inherits it.
+  authPromise.catch(() => {
+    authPromise = null;
+    authExpiresAt = 0;
+  });
+
+  return authPromise;
 }
 
 // The evidence chip behind each timeline point shows this snippet, so it has to
@@ -235,16 +265,38 @@ export async function getVisitHistory(
       });
 
     const now = Date.now();
+    // Status as well as date: a cancelled appointment with a future start is not
+    // upcoming, and listing it would also offer it in the reschedule picker —
+    // letting the patient ask to move a visit that no longer exists.
+    const DEAD_STATUSES = new Set(["cancelled", "noshow", "entered-in-error"]);
     const isUpcoming = (visit: VisitSummary) =>
-      visit.date !== null && Date.parse(visit.date) > now;
+      visit.date !== null &&
+      Date.parse(visit.date) > now &&
+      !DEAD_STATUSES.has(visit.status);
+
+    // A completed visit exists as both an Appointment and the Encounter it
+    // produced, so a real chart would list it twice. Encounter.appointment is
+    // the link between them; the Encounter wins because it carries what actually
+    // happened. (The seed has one Appointment and it is in the future, so this
+    // changes nothing here — it matters the moment real data appears.)
+    const encounterAppointmentIds = new Set(
+      encounters.flatMap((e) =>
+        (e.appointment ?? [])
+          .map((ref) => ref.reference?.split("/")[1])
+          .filter((id): id is string => Boolean(id))
+      )
+    );
 
     return {
       upcoming: appointmentRows
         .filter(isUpcoming)
         .sort((a, b) => visitTime(a) - visitTime(b)),
-      past: [...appointmentRows.filter((v) => !isUpcoming(v)), ...encounterRows].sort(
-        (a, b) => visitTime(b) - visitTime(a)
-      ),
+      past: [
+        ...appointmentRows.filter(
+          (v) => !isUpcoming(v) && !encounterAppointmentIds.has(v.fhirId)
+        ),
+        ...encounterRows,
+      ].sort((a, b) => visitTime(b) - visitTime(a)),
       careTeam: practitioners.map((practitioner) => ({
         fhirId: practitioner.id ?? "",
         name: practitionerDisplayName(practitioner),
@@ -263,8 +315,11 @@ const REQUEST_TYPE_LABELS: Record<PatientRequestType, string> = {
   records: "Records request",
 };
 
+// hasOwn, not `in`: `in` walks the prototype chain, so a Task coded
+// "constructor" or "toString" would narrow to PatientRequestType and lie to
+// every consumer downstream.
 function isRequestType(value: string | undefined): value is PatientRequestType {
-  return value !== undefined && value in REQUEST_TYPE_LABELS;
+  return value !== undefined && Object.hasOwn(REQUEST_TYPE_LABELS, value);
 }
 
 function toPatientRequest(task: Task): PatientRequest {
@@ -286,11 +341,20 @@ export async function listPatientRequests(
     // Searching on `requester` is what separates a patient's own requests from
     // the clinician-review Tasks writeDraft creates, which set `for` but never
     // `requester`. Searching on `for` would mix the two.
+    //
+    // _sort and _count matter: searchResources returns a single page (Medplum
+    // defaults to 20) and these Tasks are never cleaned up, so they accumulate
+    // across demo runs. Sorting client-side only would order whichever arbitrary
+    // page came back — past 20 requests the patient would file one, be told its
+    // Task id, and not find it in the list directly below.
     const tasks = await getClient().searchResources("Task", {
       requester: `Patient/${patientId}`,
+      _sort: "-authored-on",
+      _count: "50",
     });
 
-    // Undated to epoch 0, so it sorts last — same rule as visitTime.
+    // Server-sorted already; this only settles rows Medplum left undated, which
+    // go last — same rule as visitTime.
     const authored = (request: PatientRequest) =>
       request.authoredOn ? Date.parse(request.authoredOn) : 0;
 

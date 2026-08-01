@@ -97,8 +97,10 @@ export default function PatientPortalPage() {
       )}
 
       {loadError && (
+        // No trailing period of our own — server messages already end in one,
+        // and the result read as "…could not be filed.. Reload to try again".
         <p className="text-sm text-red-600">
-          {loadError}. Reload to try again — nothing has been changed.
+          {loadError.replace(/\.?$/, ".")} Reload to try again — nothing has been changed.
         </p>
       )}
 

@@ -12,7 +12,19 @@ import type {
   TranscriptEvent,
 } from "@/types";
 
-const OverviewSchema = z.object({ sessionId: z.string().uuid() });
+const OverviewSchema = z.object({
+  sessionId: z.string().uuid(),
+  // "health" serves the chart alone, for the intake screen's slide-out. That
+  // panel reads `patient` and `source` and nothing else, and it opens mid-voice
+  // session — the full payload would spend two extra Medplum search sets and two
+  // Supabase queries to render four lists it already had.
+  section: z.enum(["all", "health"]).default("all"),
+});
+
+// A transcript is bounded by one conversation, but say so: PostgREST caps rows
+// at 1000 silently, and with `id ASC` a silent truncation would drop the newest
+// lines — the ones the patient just spoke.
+const MAX_TRANSCRIPT_ROWS = 500;
 
 // Everything the patient portal shows, in one payload.
 //
@@ -27,24 +39,22 @@ const OverviewSchema = z.object({ sessionId: z.string().uuid() });
 // anon reads on transcript_events, agent_events and clinical_drafts only), so
 // the publishable-key client cannot list a patient's sessions at all.
 
-// Conversations ship with their transcripts inline. Capped because the payload
-// grows with every past session and nobody scrolls back further than this.
-const MAX_CONVERSATIONS = 10;
-
 export async function GET(request: NextRequest) {
   const parsed = OverviewSchema.safeParse({
     sessionId: request.nextUrl.searchParams.get("sessionId"),
+    section: request.nextUrl.searchParams.get("section") ?? undefined,
   });
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
-  const { sessionId } = parsed.data;
+  const { sessionId, section } = parsed.data;
+  const full = section === "all";
 
   const supabase = createAdminClient();
 
   const { data: session, error: sessionError } = await supabase
     .from("demo_sessions")
-    .select("patient_fhir_id")
+    .select("id, patient_fhir_id, status, mode, started_at")
     .eq("id", sessionId)
     .single();
 
@@ -53,44 +63,40 @@ export async function GET(request: NextRequest) {
   }
   const patientFhirId = session.patient_fhir_id;
 
-  const { data: sessionRows, error: sessionsError } = await supabase
-    .from("demo_sessions")
-    .select("id, status, mode, started_at")
-    .eq("patient_fhir_id", patientFhirId)
-    .order("started_at", { ascending: false, nullsFirst: false })
-    .limit(MAX_CONVERSATIONS);
-
-  if (sessionsError) {
-    return NextResponse.json({ error: sessionsError.message }, { status: 500 });
-  }
-
-  const sessionIds = (sessionRows ?? []).map((row) => row.id);
-
-  const [patient, visits, requests, transcriptRows, draftRows] = await Promise.all([
+  // This session only, deliberately — NOT every session for this patient.
+  // Every demo run starts from the same DEMO_PATIENT_FHIR_ID, so "the patient's
+  // conversations" would be everyone's: on stage the tab would show whatever the
+  // previous person said into the mic, transcripts and all. One shared synthetic
+  // patient makes patient-scoped history meaningless here; it becomes correct on
+  // its own the day real patients have distinct ids.
+  const [patient, visits, requests, transcriptRows, draftRow] = await Promise.all([
     getPatientContext(patientFhirId),
-    getVisitHistory(patientFhirId),
-    listPatientRequests(patientFhirId),
-    sessionIds.length
+    full ? getVisitHistory(patientFhirId) : null,
+    full ? listPatientRequests(patientFhirId) : null,
+    full
       ? supabase
           .from("transcript_events")
           .select("id, session_id, speaker, text, is_final, sequence_no, created_at")
-          .in("session_id", sessionIds)
-          // By id, not sequence_no: sequence numbers restart per session, and
-          // these rows span several.
+          .eq("session_id", sessionId)
+          // By id, not sequence_no: id is `bigint generated always as identity`
+          // and globally monotonic, matching use-session-events.ts.
           .order("id", { ascending: true })
+          .limit(MAX_TRANSCRIPT_ROWS)
       : { data: [], error: null },
-    sessionIds.length
+    full
       ? supabase
           .from("clinical_drafts")
           .select("session_id, chief_concern, coverage_summary")
-          .in("session_id", sessionIds)
-      : { data: [], error: null },
+          .eq("session_id", sessionId)
+          .maybeSingle()
+      : { data: null, error: null },
   ]);
 
   // The chart is the point of this screen; without it there is nothing to show,
   // so a failed read is an error rather than a half-rendered page. Only reachable
   // with ALLOW_FIXTURE_FALLBACK off — otherwise the adapters serve fixtures.
-  for (const result of [patient, visits, requests]) {
+  const reads = [patient, visits, requests].filter((r) => r !== null);
+  for (const result of reads) {
     if (!result.ok || !result.data) {
       return NextResponse.json(
         { error: result.error ?? "Could not load this patient's record" },
@@ -101,50 +107,43 @@ export async function GET(request: NextRequest) {
   if (transcriptRows.error) {
     return NextResponse.json({ error: transcriptRows.error.message }, { status: 500 });
   }
-  if (draftRows.error) {
-    return NextResponse.json({ error: draftRows.error.message }, { status: 500 });
+  if (draftRow.error) {
+    return NextResponse.json({ error: draftRow.error.message }, { status: 500 });
   }
 
   // Hand-written column mapping, per the convention in every other route handler.
-  const transcriptsBySession = new Map<string, TranscriptEvent[]>();
-  for (const row of transcriptRows.data ?? []) {
-    const events = transcriptsBySession.get(row.session_id) ?? [];
-    events.push({
-      id: row.id,
-      sessionId: row.session_id,
-      speaker: row.speaker,
-      text: row.text,
-      isFinal: row.is_final,
-      sequenceNo: row.sequence_no,
-      createdAt: row.created_at,
-    });
-    transcriptsBySession.set(row.session_id, events);
-  }
-
-  const draftsBySession = new Map(
-    (draftRows.data ?? []).map((row) => [row.session_id, row])
-  );
-
-  const conversations: PatientConversation[] = (sessionRows ?? []).map((row) => ({
-    sessionId: row.id,
-    startedAt: row.started_at,
-    status: row.status,
-    mode: row.mode,
-    chiefConcern: draftsBySession.get(row.id)?.chief_concern ?? null,
-    transcript: transcriptsBySession.get(row.id) ?? [],
+  const transcript: TranscriptEvent[] = (transcriptRows.data ?? []).map((row) => ({
+    id: row.id,
+    sessionId: row.session_id,
+    speaker: row.speaker,
+    text: row.text,
+    isFinal: row.is_final,
+    sequenceNo: row.sequence_no,
+    createdAt: row.created_at,
   }));
+
+  const conversations: PatientConversation[] = full
+    ? [
+        {
+          sessionId: session.id,
+          startedAt: session.started_at,
+          status: session.status,
+          mode: session.mode,
+          chiefConcern: draftRow.data?.chief_concern ?? null,
+          transcript,
+        },
+      ]
+    : [];
 
   const overview: PatientOverview = {
     patient: patient.data!,
-    visits: visits.data!,
+    visits: visits?.data ?? { upcoming: [], past: [], careTeam: [] },
     conversations,
-    requests: requests.data!,
-    coverage: draftsBySession.get(sessionId)?.coverage_summary ?? null,
-    // Live only if every read was — one fixture section makes the whole screen
-    // demo data as far as the patient is concerned.
-    source: [patient, visits, requests].every((r) => r.source === "live")
-      ? "live"
-      : "fixture",
+    requests: requests?.data ?? [],
+    coverage: draftRow.data?.coverage_summary ?? null,
+    // Live only if every read that ran was — one fixture section makes the whole
+    // screen demo data as far as the patient is concerned.
+    source: reads.every((r) => r.source === "live") ? "live" : "fixture",
   };
 
   return NextResponse.json(overview, {

@@ -212,7 +212,12 @@ function check() {
 
   // Live Medplum and the fixture fallback must render the same timeline.
   const fixtures = readFileSync(new URL("../src/lib/demo-fixtures.ts", import.meta.url), "utf-8");
-  for (const date of [LAMOTRIGINE_START, RASH_ONSET, PRIOR_NOTE_DATE]) {
+  // APPOINTMENT_START is in here too, so the "is it in the future" assert above
+  // covers the fixture as well. demoVisitHistory.upcoming is returned without
+  // the isUpcoming filter the live path applies, so a stale date there would
+  // show a past appointment under "Upcoming" in fixture mode with nothing to
+  // catch it.
+  for (const date of [LAMOTRIGINE_START, RASH_ONSET, PRIOR_NOTE_DATE, APPOINTMENT_START]) {
     if (!fixtures.includes(date)) fail(`${date} is missing from src/lib/demo-fixtures.ts — live and fixture timelines would disagree`);
   }
   if (!fixtures.includes(PRIOR_NOTE_TEXT)) fail("prior note text does not match the excerpt in src/lib/demo-fixtures.ts");
