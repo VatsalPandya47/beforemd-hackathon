@@ -10,6 +10,11 @@ import { LiveTranscript } from "@/components/live-transcript";
 import { AgentActivity } from "@/components/agent-activity";
 import { useVoiceSession, type UseVoiceSession } from "@/lib/voice/use-voice-session";
 import { useReplaySession, type ReplayFrame } from "@/lib/replay/use-replay-session";
+import {
+  mergeAgentEvent,
+  mergeTranscriptEvent,
+  useSessionEvents,
+} from "@/lib/realtime/use-session-events";
 import type { AgentEvent, TranscriptEvent } from "@/types";
 
 // Screen 2 (patient voice intake). The patient speaks, Deepgram transcribes,
@@ -45,6 +50,10 @@ export default function IntakePage() {
   const turnEpochRef = useRef(0);
   const turnAbortRef = useRef<AbortController | null>(null);
 
+  // Read by the Realtime handlers, which are registered once and must not close
+  // over a stale value of replay.active.
+  const replayActiveRef = useRef(false);
+
   const runTurn = useCallback(
     async (text: string) => {
       const utterance = text.trim();
@@ -60,7 +69,10 @@ export default function IntakePage() {
       setTranscript((prev) => [
         ...prev,
         {
-          id: prev.length,
+          // Negative ids mark a line this screen has shown but not yet seen
+          // committed. Database ids are always positive, so the Realtime merge
+          // adopts this entry when its row arrives instead of duplicating it.
+          id: -(prev.length + 1),
           sessionId: params.sessionId,
           speaker: "patient",
           text: utterance,
@@ -93,7 +105,7 @@ export default function IntakePage() {
         setTranscript((prev) => [
           ...prev,
           {
-            id: prev.length,
+            id: -(prev.length + 1),
             sessionId: params.sessionId,
             speaker: "agent",
             text: result.reply,
@@ -205,6 +217,45 @@ export default function IntakePage() {
     onFrame: handleReplayFrame,
   });
 
+  useEffect(() => {
+    replayActiveRef.current = replay.active;
+  }, [replay.active]);
+
+  // Realtime is the third producer writing into the transcript and the rail, and
+  // the only one that is not this screen's own doing: it carries what the server
+  // committed, including turns driven from another tab. Merging on the database
+  // id is what keeps this screen's optimistic lines from being duplicated by
+  // their own committed rows.
+  //
+  // Dropped while replay is running, for the same reason runTurn's epoch guard
+  // drops a retired turn's reply: replay owns the screen, and rows arriving then
+  // belong to the conversation replay just walked away from.
+  const applyHydration = useCallback(
+    (rows: { transcript: TranscriptEvent[]; agentEvents: AgentEvent[] }) => {
+      if (replayActiveRef.current) return;
+      setTranscript((prev) => rows.transcript.reduce(mergeTranscriptEvent, prev));
+      setAgentEvents((prev) => rows.agentEvents.reduce(mergeAgentEvent, prev));
+    },
+    []
+  );
+
+  const applyTranscriptEvent = useCallback((event: TranscriptEvent) => {
+    if (replayActiveRef.current) return;
+    setTranscript((prev) => mergeTranscriptEvent(prev, event));
+  }, []);
+
+  const applyAgentEvent = useCallback((event: AgentEvent) => {
+    if (replayActiveRef.current) return;
+    setAgentEvents((prev) => mergeAgentEvent(prev, event));
+  }, []);
+
+  const sync = useSessionEvents({
+    sessionId: params.sessionId,
+    onHydrate: applyHydration,
+    onTranscript: applyTranscriptEvent,
+    onAgentEvent: applyAgentEvent,
+  });
+
   async function startVoice() {
     setVoiceActive(await voice.start());
   }
@@ -275,6 +326,25 @@ export default function IntakePage() {
               title={voice.modeReason}
             >
               {voice.mode === "stream" ? "Deepgram live stream" : "Deepgram · server transcription"}
+            </Badge>
+          )}
+
+          {/* A screen that is only watching has no other way to tell "quiet
+              because nothing is happening" from "quiet because I stopped
+              receiving" — which is precisely the state Realtime fails into when
+              migration 003 has not been applied. */}
+          {sync.status === "error" && (
+            <Badge
+              className="bg-amber-100 text-amber-900"
+              variant="secondary"
+              title={sync.error ?? undefined}
+            >
+              Live sync off · this screen only
+            </Badge>
+          )}
+          {sync.status === "live" && !replay.active && (
+            <Badge className="bg-emerald-100 text-emerald-700" variant="secondary">
+              Live sync
             </Badge>
           )}
 
