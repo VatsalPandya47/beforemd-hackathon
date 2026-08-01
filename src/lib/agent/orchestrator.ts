@@ -17,7 +17,8 @@ import type {
 // CONSENT -> LOAD_HISTORY -> OPENING_QUESTION -> IDENTIFY_GAP ->
 // ASK_ADAPTIVE_QUESTION -> SAFETY_SCREEN -> RETRIEVE_SUPPORTING_CONTEXT ->
 // BUILD_TIMELINE -> CHECK_ELIGIBILITY -> GENERATE_DRAFT ->
-// PATIENT_CONFIRMATION -> CLINICIAN_REVIEW_READY
+// PATIENT_CONFIRMATION -> OFFER_APPOINTMENT -> BOOK_APPOINTMENT ->
+// CLINICIAN_REVIEW_READY
 //
 // Deliberately deterministic after the first two questions (doc section 3).
 // The LLM (lib/agent/llm.ts) only rephrases the question this state machine has
@@ -40,6 +41,8 @@ export const STATE_ORDER: AgentState[] = [
   "CHECK_ELIGIBILITY",
   "GENERATE_DRAFT",
   "PATIENT_CONFIRMATION",
+  "OFFER_APPOINTMENT",
+  "BOOK_APPOINTMENT",
   "CLINICIAN_REVIEW_READY",
 ];
 
@@ -79,6 +82,30 @@ const SCRIPTED_QUESTIONS = {
   ASK_ADAPTIVE_QUESTION:
     "Are you having trouble breathing, swelling of the face or mouth, fever, or sores in your mouth?",
 } as const;
+
+// The closing offer stays verbatim rather than going through generateQuestion:
+// a rephrase is free to invent a day or a time, and nothing here can actually
+// hold a slot. Same reason consent copy is verbatim.
+const APPOINTMENT_OFFER =
+  "Before we finish — would you like to book an appointment with your care team?";
+
+// Deterministic yes/no, same spirit as the safety screen: the model never gets
+// to decide what the patient agreed to. Word-boundary matched so "yes" does not
+// fire on "eyes" and "ok" does not fire on "look".
+//
+// Decline is tested first and wins ties, because the accept words show up
+// inside refusals ("no, don't book an appointment" contains both "book" and
+// "appointment"). Anything unrecognised also declines — that branch promises
+// nothing and the patient can still book through their care team, so it is the
+// safe direction to guess in.
+const APPOINTMENT_NO = /\b(no|nope|nah|not|don'?t|later|skip|maybe)\b/i;
+const APPOINTMENT_YES =
+  /\b(yes|yeah|yep|yup|sure|please|ok|okay|book|schedule|appointment)\b/i;
+
+export function wantsAppointment(utterance: string): boolean {
+  if (APPOINTMENT_NO.test(utterance)) return false;
+  return APPOINTMENT_YES.test(utterance);
+}
 
 export async function runAgentTurn(
   sessionId: string,
@@ -270,6 +297,42 @@ export async function runAgentTurn(
         toolEvents,
         draftPatch: null,
       };
+
+    case "OFFER_APPOINTMENT":
+      return {
+        reply: APPOINTMENT_OFFER,
+        nextState: nextState(currentState),
+        toolEvents,
+        draftPatch: null,
+      };
+
+    case "BOOK_APPOINTMENT": {
+      // Nothing is written to a schedule here — no FHIR Appointment is created
+      // and no slot is held. The turn records what the patient asked for and
+      // the reply says exactly that, so the demo cannot imply a booking that
+      // did not happen.
+      if (!wantsAppointment(utterance)) {
+        return {
+          reply:
+            "No problem. Your clinician will still review this draft before your visit, and you can book any time through your care team.",
+          nextState: nextState(currentState),
+          toolEvents,
+          draftPatch: null,
+        };
+      }
+      emit("tool_started", "request_appointment", "Noting your appointment request");
+      emit("tool_completed", "request_appointment", "Appointment request noted for the care team", {
+        requested: true,
+        appointmentFhirId: demoAppointmentId() || null,
+      });
+      return {
+        reply:
+          "I've noted that you'd like an appointment and passed it to your care team. They'll confirm the time with you — nothing is booked until they do.",
+        nextState: nextState(currentState),
+        toolEvents,
+        draftPatch: null,
+      };
+    }
 
     case "CLINICIAN_REVIEW_READY":
     default:

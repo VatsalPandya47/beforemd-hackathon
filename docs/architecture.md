@@ -52,8 +52,11 @@ Browser microphone
 ```
 CONSENT -> LOAD_HISTORY -> OPENING_QUESTION -> IDENTIFY_GAP -> ASK_ADAPTIVE_QUESTION
   -> SAFETY_SCREEN -> RETRIEVE_SUPPORTING_CONTEXT -> BUILD_TIMELINE -> CHECK_ELIGIBILITY
-  -> GENERATE_DRAFT -> PATIENT_CONFIRMATION -> CLINICIAN_REVIEW_READY
+  -> GENERATE_DRAFT -> PATIENT_CONFIRMATION -> OFFER_APPOINTMENT -> BOOK_APPOINTMENT
+  -> CLINICIAN_REVIEW_READY
 ```
+
+`OFFER_APPOINTMENT` asks the closing question ("would you like to book an appointment"); `BOOK_APPOINTMENT` reads the patient's answer with a deterministic yes/no match and records the request as an agent event. No FHIR `Appointment` is written and no slot is held — the reply says only that the care team will confirm.
 
 Safety implementation: a hard-coded red-flag checklist (breathing difficulty, facial or mouth swelling, fever, mucosal sores, blistering, rapid spread, severe pain) runs deterministically — the LLM never decides whether a flag can be ignored. Any active flag halts intake and shows the escalation message (`src/lib/agent/safety.ts`).
 
