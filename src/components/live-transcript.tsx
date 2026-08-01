@@ -16,9 +16,14 @@ export function LiveTranscript({
 }) {
   return (
     <div className="flex flex-col gap-3 overflow-y-auto">
-      {events.map((event) => (
+      {events.map((event, index) => (
+        // Keyed by position, for the same reason as the activity rail: this is
+        // an append-only log that never reorders, and `event.id` is not unique
+        // across sources. The live path numbers events by their position in the
+        // array while replayed events carry database ids, so after a replay is
+        // stopped and the operator types a turn, the two collide.
         <div
-          key={event.id}
+          key={index}
           className={cn(
             "max-w-[80%] rounded-2xl px-4 py-2 text-sm",
             event.speaker === "agent"
