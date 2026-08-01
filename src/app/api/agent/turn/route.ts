@@ -5,17 +5,28 @@ import { runAgentTurn, STATE_ORDER } from "@/lib/agent/orchestrator";
 import { demoClinicalDraft } from "@/lib/demo-fixtures";
 import type { AgentState, ClinicalDraft, TranscriptEvent } from "@/types";
 
-const AgentTurnSchema = z.object({
-  sessionId: z.string().uuid(),
-  utterance: z.string().min(1),
-});
+const AgentTurnSchema = z
+  .object({
+    sessionId: z.string().uuid(),
+    // Every turn but one is driven by something the patient said. The opening
+    // turn is the exception: the agent introduces itself when the mic goes
+    // live, so there is no utterance behind it.
+    utterance: z.string().min(1).optional(),
+    kind: z.enum(["utterance", "opening"]).default("utterance"),
+  })
+  .refine((body) => body.kind === "opening" || Boolean(body.utterance), {
+    message: "utterance is required",
+    path: ["utterance"],
+  });
 
 export async function POST(request: NextRequest) {
   const parsed = AgentTurnSchema.safeParse(await request.json());
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
-  const { sessionId, utterance } = parsed.data;
+  const { sessionId, kind } = parsed.data;
+  const utterance = parsed.data.utterance ?? "";
+  const isOpening = kind === "opening";
 
   const supabase = createAdminClient();
 
@@ -27,6 +38,19 @@ export async function POST(request: NextRequest) {
 
   if (sessionError || !session) {
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  }
+
+  const currentState: AgentState = STATE_ORDER.includes(session.status as AgentState)
+    ? (session.status as AgentState)
+    : "CONSENT";
+
+  // The opening turn is only ever the first turn of a session. Starting the mic
+  // again mid-conversation — after "End voice session", or after a reload —
+  // must not re-introduce the agent or advance the state machine a second time,
+  // which would leave the patient's next answer handled by the wrong state.
+  // Answered before any write so a repeat start changes nothing at all.
+  if (isOpening && currentState !== "CONSENT") {
+    return NextResponse.json({ reply: null, nextState: currentState, toolEvents: [] });
   }
 
   const { data: draftRow } = await supabase
@@ -76,16 +100,17 @@ export async function POST(request: NextRequest) {
 
   let sequenceNo = (recentEvents?.[0]?.sequence_no ?? -1) + 1;
 
-  await supabase.from("transcript_events").insert({
-    session_id: sessionId,
-    speaker: "patient",
-    text: utterance,
-    sequence_no: sequenceNo++,
-  });
+  // Nothing goes in as a patient row on the opening turn — an empty one would
+  // render as a blank bubble and replay would stream it back the same way.
+  if (!isOpening) {
+    await supabase.from("transcript_events").insert({
+      session_id: sessionId,
+      speaker: "patient",
+      text: utterance,
+      sequence_no: sequenceNo++,
+    });
+  }
 
-  const currentState: AgentState = STATE_ORDER.includes(session.status as AgentState)
-    ? (session.status as AgentState)
-    : "CONSENT";
   const result = await runAgentTurn(
     sessionId,
     session.patient_fhir_id,
