@@ -1,5 +1,9 @@
 # Demo script
 
+**Status: locked.** Patient story, numbers, and canonical dialogue below are confirmed — this is what we rehearse and pitch from.
+
+**Implementation note:** the agent's actual spoken lines today (`src/lib/agent/orchestrator.ts`) are deterministic placeholders, not this exact script — they're missing the "lamotrigine was started five weeks ago" context line and never actually voice the safety-screen question out loud (the red-flag check currently just scans whatever the patient last typed/said for keywords, silently). Once #11 (wire a real LLM into the orchestrator) lands, the live dialogue should match this script. Until then, treat this file as the target, and rehearse against the current live wording separately so nobody's surprised on stage.
+
 ## Synthetic patient
 
 | Field | Demo value |
