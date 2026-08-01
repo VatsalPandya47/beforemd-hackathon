@@ -9,13 +9,17 @@ import { VoiceOrb, type VoiceOrbState } from "@/components/voice-orb";
 import { LiveTranscript } from "@/components/live-transcript";
 import { AgentActivity } from "@/components/agent-activity";
 import { useVoiceSession, type UseVoiceSession } from "@/lib/voice/use-voice-session";
+import { useReplaySession, type ReplayFrame } from "@/lib/replay/use-replay-session";
 import type { AgentEvent, TranscriptEvent } from "@/types";
 
 // Screen 2 (patient voice intake). The patient speaks, Deepgram transcribes,
 // and each finished utterance drives one turn of the deterministic agent loop.
-// The typed box below stays: it is the manual rung of the fallback ladder if
-// the mic or Deepgram fails on stage, and it is how the loop gets exercised
-// without a microphone.
+//
+// Two rungs of the fallback ladder live on this screen alongside the live path:
+// the typed box (manual, and the only way to exercise the loop without a mic)
+// and replay (issue #18), which re-streams a committed conversation into the
+// same transcript and rail. Replay is the rung to reach for when the mic or
+// Deepgram fails outright rather than degrading.
 export default function IntakePage() {
   const params = useParams<{ sessionId: string }>();
   const router = useRouter();
@@ -130,6 +134,40 @@ export default function IntakePage() {
     voiceRef.current = voice;
   });
 
+  // Replay writes into the same two pieces of state the live path writes, so
+  // nothing downstream — transcript, rail, orb — knows which one produced a
+  // given event. `replayOrbState` is the one exception: a replayed run has no
+  // mic level or turn phase to drive the orb, so it is inferred from the frames.
+  // It only feeds the orb while replay is active, so it needs no reset when
+  // replay ends — the live branch takes over and reads idle.
+  const [replayOrbState, setReplayOrbState] = useState<VoiceOrbState>("idle");
+
+  const handleReplayBegin = useCallback(() => {
+    voiceRef.current?.stop();
+    setVoiceActive(false);
+    setTranscript([]);
+    setAgentEvents([]);
+    setTurnError(null);
+    setNextState("CONSENT");
+    setReplayOrbState("idle");
+  }, []);
+
+  const handleReplayFrame = useCallback((frame: ReplayFrame) => {
+    if (frame.type === "transcript") {
+      setTranscript((prev) => [...prev, frame.event]);
+      setReplayOrbState(frame.event.speaker === "agent" ? "speaking" : "listening");
+    } else {
+      setAgentEvents((prev) => [...prev, frame.event]);
+      setReplayOrbState("thinking");
+    }
+  }, []);
+
+  const replay = useReplaySession({
+    sessionId: params.sessionId,
+    onBegin: handleReplayBegin,
+    onFrame: handleReplayFrame,
+  });
+
   async function startVoice() {
     setVoiceActive(await voice.start());
   }
@@ -140,13 +178,16 @@ export default function IntakePage() {
   }
 
   function submitTyped() {
-    if (!typed.trim() || turnPhase !== "idle") return;
+    if (!typed.trim() || turnPhase !== "idle" || replay.active) return;
     enqueueUtterance(typed);
     setTyped("");
   }
 
-  const orbState: VoiceOrbState =
-    turnPhase === "speaking"
+  // A replayed run drives the orb off its own frames; a live one off the mic
+  // and the turn phase.
+  const orbState: VoiceOrbState = replay.active
+    ? replayOrbState
+    : turnPhase === "speaking"
       ? "speaking"
       : turnPhase === "thinking" || voice.phase === "processing"
         ? "thinking"
@@ -160,15 +201,33 @@ export default function IntakePage() {
         <VoiceOrb state={orbState} level={voice.level} />
 
         <div className="flex flex-col items-center gap-2">
-          {voiceActive ? (
-            <Button variant="outline" onClick={endVoice}>
-              End voice session
-            </Button>
-          ) : (
-            <Button onClick={startVoice} disabled={voice.phase === "starting"}>
-              {voice.phase === "starting" ? "Starting…" : "Start voice intake"}
-            </Button>
-          )}
+          <div className="flex items-center gap-2">
+            {voiceActive ? (
+              <Button variant="outline" onClick={endVoice}>
+                End voice session
+              </Button>
+            ) : (
+              <Button
+                onClick={startVoice}
+                disabled={voice.phase === "starting" || replay.active}
+              >
+                {voice.phase === "starting" ? "Starting…" : "Start voice intake"}
+              </Button>
+            )}
+
+            {/* The replay rung. Always reachable rather than only appearing
+                after a failure: on stage the operator needs it to be one
+                predictable click, not a control that shows up under stress. */}
+            {replay.active ? (
+              <Button variant="outline" onClick={replay.stop}>
+                Stop replay
+              </Button>
+            ) : (
+              <Button variant="outline" onClick={replay.start}>
+                {replay.phase === "done" ? "Replay again" : "Replay demo"}
+              </Button>
+            )}
+          </div>
 
           {voiceActive && voice.mode && (
             // Provenance, not decoration: which Deepgram path this session is
@@ -181,16 +240,41 @@ export default function IntakePage() {
               {voice.mode === "stream" ? "Deepgram live stream" : "Deepgram · server transcription"}
             </Badge>
           )}
+
+          {replay.source && (
+            // Same provenance rule as every adapter: say which source produced
+            // what is on screen, never hide a fixture behind live-looking UI.
+            <Badge className="bg-slate-100 text-slate-700" variant="secondary">
+              {replay.source === "live"
+                ? "Replay · recorded session"
+                : "Replay · scripted demo fixture"}
+            </Badge>
+          )}
         </div>
 
         {voice.error && (
           <p className="text-center text-sm text-red-600">
-            {voice.error}. You can continue by typing below.
+            {voice.error}. You can continue by typing below, or run the recorded demo with
+            Replay demo.
           </p>
         )}
+        {replay.error && <p className="text-center text-sm text-red-600">{replay.error}</p>}
         {turnError && <p className="text-center text-sm text-red-600">{turnError}</p>}
 
         <LiveTranscript events={transcript} interim={voice.interim} />
+
+        {/* Replay drives the state machine from committed events rather than
+            through it, so it never reaches CLINICIAN_REVIEW_READY and never
+            navigates on its own. The handoff is explicit instead — on stage the
+            operator decides when to move to the clinician screen. */}
+        {replay.phase === "done" && (
+          <Button
+            className="self-center"
+            onClick={() => router.push(`/clinician/${params.sessionId}`)}
+          >
+            Continue to clinician review
+          </Button>
+        )}
 
         <div className="flex gap-2">
           <Textarea
@@ -203,17 +287,26 @@ export default function IntakePage() {
               }
             }}
             placeholder={
-              voiceActive ? "Or type what the patient says…" : "Type what the patient says…"
+              replay.active
+                ? "Replaying the recorded session…"
+                : voiceActive
+                  ? "Or type what the patient says…"
+                  : "Type what the patient says…"
             }
+            disabled={replay.active}
             className="min-h-0"
           />
-          <Button onClick={submitTyped} disabled={turnPhase !== "idle" || !typed.trim()}>
+          <Button
+            onClick={submitTyped}
+            disabled={turnPhase !== "idle" || !typed.trim() || replay.active}
+          >
             Send
           </Button>
         </div>
 
         <p className="text-xs text-muted-foreground">
-          Synthetic demo only. Clinician review required. Current state: {nextState}
+          Synthetic demo only. Clinician review required.{" "}
+          {replay.active ? "Replaying a recorded session." : `Current state: ${nextState}`}
         </p>
       </div>
 
