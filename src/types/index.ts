@@ -350,6 +350,8 @@ export type AgentState =
   | "CHECK_ELIGIBILITY"
   | "GENERATE_DRAFT"
   | "PATIENT_CONFIRMATION"
+  | "OFFER_APPOINTMENT"
+  | "BOOK_APPOINTMENT"
   | "CLINICIAN_REVIEW_READY";
 
 export type AgentTurnResult = {

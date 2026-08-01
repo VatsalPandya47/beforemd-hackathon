@@ -42,7 +42,7 @@ Browser microphone
 
 - Use adapters for every sponsor integration (`src/lib/integrations/*`) so a cached fallback can replace a live API without changing the UI — every adapter returns the shared `ToolResult<T>` shape (`ok`, `source: 'live' | 'cache' | 'fixture'`, `data`, `error`, `latencyMs`).
 - Persist every tool event so the demo can replay if the live voice path fails (`/api/demo/replay`).
-- Keep the agent workflow deterministic after the first two questions (`src/lib/agent/orchestrator.ts`) — the LLM chooses wording, never the next state.
+- Keep the agent workflow deterministic (`src/lib/agent/orchestrator.ts`) — the LLM chooses what to ask within a step whose goal the state machine fixed, never the next state. It also never decides a safety outcome or generates consent, escalation or disclaimer copy, and the deterministic red-flag screen runs before any model call on every turn carrying a patient utterance. Widened from "the LLM chooses wording, never the next state" in #59: restricted to rephrasing a fixed question, the agent answered a patient reporting a sore throat by asking whether their rash predated lamotrigine.
 - Use one synthetic patient and one appointment only (Maya Thompson — see `docs/demo-script.md`).
 - Deploy continuously. `main` must always contain a runnable demo.
 - Use feature flags (`USE_LIVE_*`, `ALLOW_FIXTURE_FALLBACK`) for live versus mocked sponsor calls.
@@ -52,8 +52,11 @@ Browser microphone
 ```
 CONSENT -> LOAD_HISTORY -> OPENING_QUESTION -> IDENTIFY_GAP -> ASK_ADAPTIVE_QUESTION
   -> SAFETY_SCREEN -> RETRIEVE_SUPPORTING_CONTEXT -> BUILD_TIMELINE -> CHECK_ELIGIBILITY
-  -> GENERATE_DRAFT -> PATIENT_CONFIRMATION -> CLINICIAN_REVIEW_READY
+  -> GENERATE_DRAFT -> PATIENT_CONFIRMATION -> OFFER_APPOINTMENT -> BOOK_APPOINTMENT
+  -> CLINICIAN_REVIEW_READY
 ```
+
+`OFFER_APPOINTMENT` asks the closing question ("would you like to book an appointment"); `BOOK_APPOINTMENT` reads the patient's answer with a deterministic yes/no match and records the request as an agent event. No FHIR `Appointment` is written and no slot is held — the reply says only that the care team will confirm.
 
 Safety implementation: a hard-coded red-flag checklist (breathing difficulty, facial or mouth swelling, fever, mucosal sores, blistering, rapid spread, severe pain) runs deterministically — the LLM never decides whether a flag can be ignored. Any active flag halts intake and shows the escalation message (`src/lib/agent/safety.ts`).
 

@@ -233,3 +233,110 @@
     animation-iteration-count: 1 !important;
   }
 }
+
+/* Landing page hero background only (src/app/page.tsx). Stays in the
+   blue/indigo family the rest of the app already uses (--primary is the same
+   hue, 265) rather than introducing red or magenta, which would read as
+   generic AI marketing rather than this product's clinical navy.
+
+   The two glow blobs drift slowly via `transform` on pseudo-elements rather
+   than animating the radial-gradient positions directly — gradient position
+   is not reliably interpolable across browsers, transform is. Content inside
+   `.bmd-hero-glow` needs `relative z-10` (see page.tsx) to paint above these. */
+.bmd-hero-glow {
+  position: relative;
+  overflow: hidden;
+  background-color: oklch(0.16 0.03 265);
+  background-image: radial-gradient(
+    40% 40% at 92% 92%,
+    oklch(0.48 0.14 292 / 0.3),
+    transparent 70%
+  );
+}
+
+.bmd-hero-glow::before,
+.bmd-hero-glow::after {
+  content: "";
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(90px);
+  pointer-events: none;
+}
+
+.bmd-hero-glow::before {
+  top: -15%;
+  right: -8%;
+  width: 55%;
+  height: 65%;
+  background: oklch(0.55 0.18 260 / 0.5);
+  animation: bmd-glow-drift-a 22s ease-in-out infinite alternate;
+}
+
+.bmd-hero-glow::after {
+  bottom: -20%;
+  left: -10%;
+  width: 50%;
+  height: 60%;
+  background: oklch(0.5 0.15 225 / 0.38);
+  animation: bmd-glow-drift-b 26s ease-in-out infinite alternate;
+}
+
+@keyframes bmd-glow-drift-a {
+  from {
+    transform: translate(0, 0) scale(1);
+  }
+  to {
+    transform: translate(-5%, 6%) scale(1.1);
+  }
+}
+
+@keyframes bmd-glow-drift-b {
+  from {
+    transform: translate(0, 0) scale(1);
+  }
+  to {
+    transform: translate(6%, -5%) scale(1.06);
+  }
+}
+
+/* Hero entrance: staggered fade-up on load, once. Applied via
+   .bmd-hero-fade-1..4 in page.tsx, delays baked into each class rather than
+   inline style so the reduced-motion override below can zero all four at
+   once. */
+@keyframes bmd-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(1rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.bmd-hero-fade-1 {
+  animation: bmd-fade-up 700ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.bmd-hero-fade-2 {
+  animation: bmd-fade-up 700ms cubic-bezier(0.16, 1, 0.3, 1) 120ms both;
+}
+.bmd-hero-fade-3 {
+  animation: bmd-fade-up 700ms cubic-bezier(0.16, 1, 0.3, 1) 240ms both;
+}
+.bmd-hero-fade-4 {
+  animation: bmd-fade-up 700ms cubic-bezier(0.16, 1, 0.3, 1) 360ms both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bmd-hero-glow::before,
+  .bmd-hero-glow::after {
+    animation: none;
+  }
+  .bmd-hero-fade-1,
+  .bmd-hero-fade-2,
+  .bmd-hero-fade-3,
+  .bmd-hero-fade-4 {
+    animation-duration: 1ms !important;
+    animation-delay: 0ms !important;
+  }
+}

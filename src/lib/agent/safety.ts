@@ -14,8 +14,17 @@ export const SAFETY_RED_FLAGS = [
 
 export type SafetyRedFlag = (typeof SAFETY_RED_FLAGS)[number];
 
+// "Contact your care team" with no way to do it is a weak instruction at the
+// one moment the agent is telling someone something may be urgent. Configurable
+// so a real clinic line can be set without a code change; the default is a
+// synthetic demo number, like every other identifier in this build.
+const URGENT_CARE_PHONE = process.env.URGENT_CARE_PHONE ?? "+1 676 767 6767";
+
+// Emergency services stay named first and unconditionally. A red flag here can
+// mean airway compromise, and the correct instruction for that is not to phone
+// a clinic and wait.
 export const ESCALATION_MESSAGE =
-  "This may need urgent clinical attention. Please contact your care team or emergency services now. I'm pausing the pre-visit intake.";
+  `This may need urgent clinical attention. If you are struggling to breathe, swelling, or feel very unwell, call emergency services now. Otherwise call your care team at ${URGENT_CARE_PHONE}. I'm pausing the pre-visit intake.`;
 
 // Patients describe symptoms, they do not recite a checklist. Matching the flag
 // names as substrings meant "I'm having trouble breathing" scored no flags
@@ -44,9 +53,15 @@ const RED_FLAG_PATTERNS: Record<SafetyRedFlag, RegExp[]> = {
     /\bthroat (is )?closing\b/,
   ],
   fever: [/\bfevers?\b/, /\bfebrile\b/, /\btemperature\b/, /\bchills\b/, /\bshivering\b/],
+  // This flag means discrete ulcerative lesions — the SJS/TEN concern — not a
+  // throat that hurts. "sore" as an adjective must not match: "my throat is
+  // sore" is pharyngitis and was escalating as mucosal ulceration. So the
+  // body-part-adjacent pattern requires the plural noun, and the singular is
+  // only accepted with a locating preposition ("a sore in my mouth").
   "mucosal sores": [
     /\bmucosal\b[^,.;]{0,15}\b(sores?|ulcers?|lesions?)\b/,
-    /\b(mouth|oral|lips?|tongue|throat|genital|eyes?)\b[^,.;]{0,20}\b(sores?|ulcers?|blisters?|lesions?)\b/,
+    /\b(mouth|oral|lips?|tongue|throat|genital|eyes?)\b[^,.;]{0,20}\b(sores|ulcers?|blisters?|lesions?)\b/,
+    /\b(sores|ulcers?|blisters?|lesions?)\b[^,.;]{0,20}\b(mouth|oral|lips?|tongue|throat|genital|eyes?)\b/,
     /\b(sores?|ulcers?|blisters?)\b[^,.;]{0,20}\b(in|on|inside)\b[^,.;]{0,15}\b(mouth|lips?|tongue|throat|eyes?)\b/,
     /\bcanker sores?\b/,
   ],

@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "seed:medplum": "node --env-file=.env.local scripts/seed-medplum.mjs",
-    "test:safety": "node --import tsx --test src/lib/agent/safety.test.ts",
+    "test:safety": "node --import tsx --test src/lib/agent/*.test.ts",
     "test:realtime": "node --import tsx --test src/lib/realtime/use-session-events.test.ts",
     "test:visits": "node --import tsx --test src/lib/integrations/visit-history.test.ts",
     "test:cost": "node --import tsx --test src/lib/cost-estimate.test.ts"
@@ -30,6 +30,7 @@
     "date-fns": "^4.4.0",
     "lucide-react": "^1.28.0",
     "next": "16.2.12",
+    "onnxruntime-node": "1.21.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "shadcn": "^4.16.1",
