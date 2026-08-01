@@ -25,14 +25,18 @@ import type {
 // BUILD_TIMELINE -> CHECK_ELIGIBILITY -> GENERATE_DRAFT ->
 // PATIENT_CONFIRMATION -> CLINICIAN_REVIEW_READY
 //
-// Deliberately deterministic after the first two questions (doc section 3).
-// The LLM (lib/agent/llm.ts) only rephrases the question this state machine has
-// already chosen, and fills the structured draft. It never picks the next
-// state. Consent, escalation, and the "no diagnosis" disclaimer stay verbatim
-// below — the model never generates safety or consent copy.
+// State order is fixed (doc section 3). Within a step, the LLM
+// (lib/agent/llm.ts) chooses what to ask in service of that step's goal, and
+// fills the structured draft. It never picks the next state, never decides a
+// safety outcome, and never generates consent, escalation or disclaimer copy —
+// those stay verbatim below.
 //
-// SCRIPTED_QUESTIONS are the intents handed to the LLM and the fallback spoken
-// aloud whenever the model errors, times out, or overruns the word cap.
+// The red-flag screen runs before any model call on every turn that carries a
+// patient utterance, including LOAD_HISTORY, which carries the answer to the
+// consent question.
+//
+// SCRIPTED_QUESTIONS are the fallback spoken aloud whenever the model errors,
+// times out, or overruns the word cap — not the plan.
 
 export const STATE_ORDER: AgentState[] = [
   "CONSENT",
@@ -74,28 +78,46 @@ function toolEvent(
   };
 }
 
-// One distinct intent per state, following the scripted conversation in doc
-// section 2. These three states previously shared a single hard-coded question,
-// which asked the patient the same thing three turns in a row.
-const SCRIPTED_QUESTIONS = {
+// Spoken when the model is unavailable, so they have to work for any complaint.
+// These were the demo script — lamotrigine and a rash — which meant a
+// rate-limited turn still asked a sore-throat patient whether their rash
+// improved when they paused their medication, implying a connection to a drug
+// they never mentioned. That is the reported bug, surviving on the degraded
+// path. ASK_ADAPTIVE_QUESTION stays verbatim: it enumerates the exact symptoms
+// the deterministic red-flag screen looks for.
+export const SCRIPTED_QUESTIONS = {
   opening: "What would you most like your doctor to understand today?",
-  OPENING_QUESTION:
-    "I can see lamotrigine was started five weeks ago. Did the rash begin before or after you started it?",
-  IDENTIFY_GAP: "Did it improve when you stopped or paused the medication?",
+  OPENING_QUESTION: "When did this start, and has it been getting better or worse since then?",
+  IDENTIFY_GAP: "Does anything make it better or worse, and have you had this before?",
   ASK_ADAPTIVE_QUESTION:
     "Are you having trouble breathing, swelling of the face or mouth, fever, or sores in your mouth?",
 } as const;
 
-// LLM call budget: the AI Gateway free tier throttles after a handful of calls
-// (rolling window, not a hard cap — see issue #47), and a full run needs 5-6
-// (4 questions + the draft's retry). Until credits land, only states in this
-// set get an LLM-rephrased question — everywhere else speaks the scripted
-// line verbatim. GENERATE_DRAFT always calls the model regardless of this
-// set; the draft is the call that actually needs to land.
+// What each step needs to establish. The model decides what to actually ask in
+// service of the goal, so it can follow the patient instead of a script — a
+// patient reporting a sore throat was previously asked whether their rash
+// predated lamotrigine, because the question text was fixed to the demo story.
+// SCRIPTED_QUESTIONS above are now the fallback for these steps, not the plan.
+const QUESTION_GOALS: Partial<Record<AgentState, string>> = {
+  LOAD_HISTORY:
+    "Open the intake. Find out, in their own words, what the patient most wants their clinician to understand today.",
+  OPENING_QUESTION:
+    "Establish the timing and course of the concern they just raised — when it started, and whether anything in their history lines up with it.",
+  IDENTIFY_GAP:
+    "Find the missing detail that would most change how a clinician reads this: what makes it better or worse, whether it has happened before, or what they have already tried.",
+};
+
+// Derived, not declared alongside the goals: a state listed here without a goal
+// would send the model "Your goal for this turn:" followed by nothing — a live
+// call with no instruction, no warning and no fallback. Deriving makes that
+// unrepresentable. ASK_ADAPTIVE_QUESTION stays excluded by having no goal.
 //
-// Restore the full adaptive experience in one line: add "LOAD_HISTORY",
-// "IDENTIFY_GAP", and "ASK_ADAPTIVE_QUESTION" back to this set.
-const LLM_QUESTION_STATES = new Set<AgentState>(["OPENING_QUESTION"]);
+// Cost: three question calls plus the draft. The AI Gateway free tier throttles
+// after roughly 3-5 (issue #47), so on a spent bucket some turns fall back to
+// the scripted line above. Credits remove the ceiling.
+export const LLM_QUESTION_STATES = new Set<AgentState>(
+  Object.keys(QUESTION_GOALS) as AgentState[]
+);
 
 export async function runAgentTurn(
   sessionId: string,
@@ -132,14 +154,35 @@ export async function runAgentTurn(
       };
 
     case "LOAD_HISTORY": {
+      // This turn carries the patient's answer to the consent question, and
+      // that answer can contain a red flag — "yes, and my face is swelling up".
+      // It went unscreened until now, which was survivable while the reply was
+      // a fixed string but is not once the utterance is sent to a model.
+      const consentFlags = checkSafetyRedFlags(utterance, draft.safetyFlags);
+      if (hasActiveRedFlag(consentFlags)) {
+        emit("safety_flag", "check_safety_red_flags", "Urgent red flag detected", {
+          flags: consentFlags,
+        });
+        return {
+          reply: ESCALATION_MESSAGE,
+          nextState: "SAFETY_SCREEN",
+          toolEvents,
+          draftPatch: { safetyFlags: consentFlags },
+        };
+      }
+
       emit("tool_started", "get_patient_context", "Reviewing medication and visit history");
       const context = await getPatientContext(patientFhirId);
       emit("tool_completed", "get_patient_context", "Reviewed medication and visit history", {
         source: context.source,
       });
-      const opening = LLM_QUESTION_STATES.has(currentState)
+      // The goal itself is the gate — a step with no goal has nothing to ask
+      // the model for, so it speaks its scripted line.
+      const openingGoal = QUESTION_GOALS[currentState];
+      const opening = openingGoal
         ? await generateQuestion({
-            intent: SCRIPTED_QUESTIONS.opening,
+            goal: openingGoal,
+            fallback: SCRIPTED_QUESTIONS.opening,
             utterance,
             patientContext: context.data ?? null,
             transcript,
@@ -150,8 +193,8 @@ export async function runAgentTurn(
         nextState: nextState(currentState),
         toolEvents,
         draftPatch: context.data
-          ? { chiefConcern: draft.chiefConcern }
-          : null,
+          ? { chiefConcern: draft.chiefConcern, safetyFlags: consentFlags }
+          : { safetyFlags: consentFlags },
       };
     }
 
@@ -172,9 +215,11 @@ export async function runAgentTurn(
           draftPatch: { safetyFlags },
         };
       }
-      const question = LLM_QUESTION_STATES.has(currentState)
+      const questionGoal = QUESTION_GOALS[currentState];
+      const question = questionGoal
         ? await generateQuestion({
-            intent: SCRIPTED_QUESTIONS[currentState],
+            goal: questionGoal,
+            fallback: SCRIPTED_QUESTIONS[currentState],
             utterance,
             patientContext: await loadContext(),
             transcript,
