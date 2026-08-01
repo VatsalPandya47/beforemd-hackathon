@@ -19,8 +19,16 @@ import {
 } from "@/lib/realtime/use-session-events";
 import type { AgentEvent, TranscriptEvent } from "@/types";
 
+// "opening" is the agent speaking first; every other turn answers a patient
+// utterance. Both run the same agent loop, so they share one path here.
+type TurnKind = "utterance" | "opening";
+type QueuedTurn = { text: string; kind: TurnKind };
+
 // Screen 2 (patient voice intake). The patient speaks, Deepgram transcribes,
 // and each finished utterance drives one turn of the deterministic agent loop.
+// The one turn no patient utterance drives is the opening: the agent greets and
+// asks for consent as soon as the mic is live, so nobody has to guess that the
+// silent orb is waiting on them.
 //
 // Two rungs of the fallback ladder live on this screen alongside the live path:
 // the typed box (manual, and the only way to exercise the loop without a mic)
@@ -57,9 +65,9 @@ export default function IntakePage() {
   const replayActiveRef = useRef(false);
 
   const runTurn = useCallback(
-    async (text: string) => {
+    async (text: string, kind: TurnKind) => {
       const utterance = text.trim();
-      if (!utterance) return;
+      if (kind === "utterance" && !utterance) return;
 
       const epoch = turnEpochRef.current;
       const stale = () => turnEpochRef.current !== epoch;
@@ -68,33 +76,41 @@ export default function IntakePage() {
       turnAbortRef.current = controller;
 
       setTurnError(null);
-      setTranscript((prev) =>
-        // Negative ids mark a line this screen has shown but not yet seen
-        // committed; database ids are always positive. Appended through the
-        // merge rather than pushed, because the committed row can arrive first.
-        appendOptimisticEvent(prev, {
-          id: -(prev.length + 1),
-          sessionId: params.sessionId,
-          speaker: "patient",
-          text: utterance,
-          isFinal: true,
-          sequenceNo: prev.length,
-          createdAt: new Date().toISOString(),
-        })
-      );
+      if (kind === "utterance") {
+        setTranscript((prev) =>
+          // Negative ids mark a line this screen has shown but not yet seen
+          // committed; database ids are always positive. Appended through the
+          // merge rather than pushed, because the committed row can arrive first.
+          appendOptimisticEvent(prev, {
+            id: -(prev.length + 1),
+            sessionId: params.sessionId,
+            speaker: "patient",
+            text: utterance,
+            isFinal: true,
+            sequenceNo: prev.length,
+            createdAt: new Date().toISOString(),
+          })
+        );
+      }
       setTurnPhase("thinking");
 
       try {
         const response = await fetch("/api/agent/turn", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sessionId: params.sessionId, utterance }),
+          body: JSON.stringify(
+            kind === "opening"
+              ? { sessionId: params.sessionId, kind }
+              : { sessionId: params.sessionId, kind, utterance }
+          ),
           signal: controller.signal,
         });
         if (!response.ok) throw new Error(`The agent turn failed (${response.status})`);
 
         const result = (await response.json()) as {
-          reply: string;
+          // Null only when the server declines an opening turn because the
+          // conversation is already under way.
+          reply: string | null;
           nextState: string;
           toolEvents?: AgentEvent[];
         };
@@ -103,26 +119,32 @@ export default function IntakePage() {
         // caring, because replay now owns what is on it.
         if (stale()) return;
 
-        setTranscript((prev) =>
-          appendOptimisticEvent(prev, {
-            id: -(prev.length + 1),
-            sessionId: params.sessionId,
-            speaker: "agent",
-            text: result.reply,
-            isFinal: true,
-            sequenceNo: prev.length,
-            createdAt: new Date().toISOString(),
-          })
-        );
+        const reply = result.reply;
+        if (reply) {
+          setTranscript((prev) =>
+            appendOptimisticEvent(prev, {
+              id: -(prev.length + 1),
+              sessionId: params.sessionId,
+              speaker: "agent",
+              text: reply,
+              isFinal: true,
+              sequenceNo: prev.length,
+              createdAt: new Date().toISOString(),
+            })
+          );
+        }
         // Same race on the rail, and the same fix: these carry the ids the route
         // inserted, so the merge drops any Realtime already delivered.
         setAgentEvents((prev) => (result.toolEvents ?? []).reduce(mergeAgentEvent, prev));
         setNextState(result.nextState);
 
-        setTurnPhase("speaking");
-        // Resolves when playback ends, or immediately if voice is not running —
-        // the reply is already on screen either way.
-        await voiceRef.current?.speak(result.reply);
+        if (reply) {
+          setTurnPhase("speaking");
+          // Resolves when playback ends, or immediately if voice is not
+          // running — the reply is already on screen either way. The engine
+          // mutes the mic while it plays, so the agent never hears itself.
+          await voiceRef.current?.speak(reply);
+        }
 
         if (stale()) return;
 
@@ -143,22 +165,25 @@ export default function IntakePage() {
     [params.sessionId, router]
   );
 
-  // Utterances queue rather than run immediately: the patient can finish a
-  // second sentence while the first turn is still in flight, and turns must
-  // stay ordered because the state machine advances one step per turn.
-  const queueRef = useRef<string[]>([]);
+  // Turns queue rather than run immediately: the patient can finish a second
+  // sentence while the first turn is still in flight, and turns must stay
+  // ordered because the state machine advances one step per turn. The opening
+  // turn goes through the same queue for exactly that reason — a patient who
+  // starts talking the instant the mic opens must not overtake the greeting.
+  const queueRef = useRef<QueuedTurn[]>([]);
   const drainingRef = useRef(false);
 
-  const enqueueUtterance = useCallback(
-    (text: string) => {
-      queueRef.current.push(text);
+  const enqueueTurn = useCallback(
+    (turn: QueuedTurn) => {
+      queueRef.current.push(turn);
       if (drainingRef.current) return;
 
       drainingRef.current = true;
       void (async () => {
         try {
           while (queueRef.current.length > 0) {
-            await runTurn(queueRef.current.shift()!);
+            const next = queueRef.current.shift()!;
+            await runTurn(next.text, next.kind);
           }
         } finally {
           drainingRef.current = false;
@@ -166,6 +191,11 @@ export default function IntakePage() {
       })();
     },
     [runTurn]
+  );
+
+  const enqueueUtterance = useCallback(
+    (text: string) => enqueueTurn({ text, kind: "utterance" }),
+    [enqueueTurn]
   );
 
   const voice = useVoiceSession(enqueueUtterance);
@@ -259,7 +289,12 @@ export default function IntakePage() {
   });
 
   async function startVoice() {
-    setVoiceActive(await voice.start());
+    const started = await voice.start();
+    setVoiceActive(started);
+    // The patient should never have to speak first into silence. The server
+    // ignores this on any session past CONSENT, so restarting the mic
+    // mid-conversation picks up where it left off instead of re-greeting.
+    if (started) enqueueTurn({ text: "", kind: "opening" });
   }
 
   function endVoice() {
@@ -390,31 +425,20 @@ export default function IntakePage() {
             navigates on its own. The handoff is explicit instead — on stage the
             operator decides when to move to the clinician screen.
 
-            It is offered only after a fixture replay, because only then is it
-            truthful: `demoReplayTurns` is the conversation that produced
-            `demoClinicalDraft`, so the brief on the next screen really is the
-            one this replay just played. After replaying a *recorded* session
-            the two are unrelated — `clinician/[sessionId]/page.tsx` renders
-            `demoClinicalDraft` with the session id swapped in and never loads
-            that session's draft — so sending the operator onward would invite
-            approving a record that does not match what they just watched.
-            Withholding the button is the narrow fix; the page loading its own
-            draft is the real one, and it is not replay's to make. */}
-        {replay.phase === "done" &&
-          (replay.source === "fixture" ? (
-            <Button
-              className="h-12 self-center px-6 text-base"
-              onClick={() => router.push(`/clinician/${params.sessionId}`)}
-            >
-              Continue to clinician review
-            </Button>
-          ) : (
-            <p className="text-center text-sm text-muted-foreground">
-              Replay finished. The clinician review screen still shows the scripted demo draft
-              rather than this session&apos;s, so it is not linked from here — that draft would
-              not match the conversation above.
-            </p>
-          ))}
+            This was previously withheld after replaying a recorded session,
+            because the clinician screen showed `demoClinicalDraft` for every
+            session and the brief would not have matched the conversation. That
+            was a workaround for #30; now that the screen loads the draft
+            belonging to its own session id and labels where it came from, the
+            handoff is truthful from either replay source. */}
+        {replay.phase === "done" && (
+          <Button
+            className="h-12 self-center px-6 text-base"
+            onClick={() => router.push(`/clinician/${params.sessionId}`)}
+          >
+            Continue to clinician review
+          </Button>
+        )}
 
         <div className="flex gap-2">
           <Textarea

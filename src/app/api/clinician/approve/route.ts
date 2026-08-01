@@ -27,18 +27,35 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
 
-  const { data: draft } = await supabase
+  const { data: draft, error: draftError } = await supabase
     .from("clinical_drafts")
     .select("*")
     .eq("session_id", sessionId)
-    .single();
+    .maybeSingle();
+
+  if (draftError) {
+    return NextResponse.json({ error: draftError.message }, { status: 500 });
+  }
+
+  // Mirrors the client-side guard in clinician/[sessionId]/page.tsx (#30), but
+  // enforced here too: a disabled button is not a security boundary, and
+  // writeDraft has no fixture fallback — skipping this would write an empty
+  // ClinicalImpression to the real chart for a session that never produced
+  // a draft, under whatever edits were POSTed alongside it.
+  if (!draft) {
+    const body: ApproveErrorResponse = {
+      error: "This session has no saved draft, so it cannot be approved.",
+      source: "fixture",
+    };
+    return NextResponse.json(body, { status: 409 });
+  }
 
   const result = await writeDraft({
     sessionId,
     patientFhirId: session.patient_fhir_id,
     encounterFhirId: session.encounter_fhir_id,
     questionnaireResponse: edits ?? {},
-    clinicalImpressionNote: draft?.chief_concern ?? "",
+    clinicalImpressionNote: draft.chief_concern ?? "",
   });
 
   // Unlike the read path, writeDraft has no fixture fallback on failure — it
