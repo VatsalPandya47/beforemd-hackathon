@@ -334,7 +334,7 @@ function VisitsPanel({
   );
 }
 
-// --- My conversations --------------------------------------------------------
+// --- This conversation -------------------------------------------------------
 
 function ConversationsPanel({
   conversations,
@@ -369,18 +369,17 @@ function ConversationsPanel({
             <button
               type="button"
               aria-expanded={isOpen}
-              className="w-full cursor-pointer rounded-t-xl px-6 py-6 text-left focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+              className="w-full cursor-pointer rounded-t-xl px-(--card-spacing) text-left focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
               onClick={() => setExpanded(isOpen ? null : conversation.sessionId)}
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <span className="font-heading block text-base font-medium text-foreground">
+                  <span className="font-heading block text-base leading-snug font-medium text-foreground">
                     {conversation.chiefConcern ?? "Pre-visit conversation"}
                   </span>
                   <span className="mt-1 block text-xs text-slate-500">
                     {formatDate(conversation.startedAt)} · {conversation.transcript.length}{" "}
                     messages
-                    {conversation.sessionId === currentSessionId && " · this visit"}
                   </span>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
@@ -656,7 +655,9 @@ export function PatientPortal({
   const tabs = [
     { value: "health", label: "My health" },
     { value: "visits", label: "My visits" },
-    { value: "conversations", label: "My conversations" },
+    // Singular: the overview route scopes conversations to this session, so the
+    // tab is always exactly one.
+    { value: "conversations", label: "This conversation" },
     { value: "requests", label: "Requests" },
   ];
 

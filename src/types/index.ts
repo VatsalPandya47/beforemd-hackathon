@@ -178,6 +178,10 @@ export type PatientConversation = {
   transcript: TranscriptEvent[];
 };
 
+// `?section=health` on /api/patient/overview returns this same shape with
+// `visits`, `conversations` and `requests` empty — not fetched, rather than
+// none. Only `patient` and `source` are meaningful there. Callers that need to
+// tell the two apart should request `section=all` (the default).
 export type PatientOverview = {
   patient: PatientContext;
   visits: VisitHistory;

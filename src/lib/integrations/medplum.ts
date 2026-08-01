@@ -51,6 +51,11 @@ const AUTH_TTL_MS = 5 * 60_000;
 let authPromise: Promise<void> | null = null;
 let authExpiresAt = 0;
 
+function resetAuth(): void {
+  authPromise = null;
+  authExpiresAt = 0;
+}
+
 async function ensureAuth(): Promise<void> {
   const clientId = process.env.MEDPLUM_CLIENT_ID;
   const clientSecret = process.env.MEDPLUM_CLIENT_SECRET;
@@ -67,10 +72,7 @@ async function ensureAuth(): Promise<void> {
     .then(() => undefined);
 
   // A failed login must not stay cached, or every later read inherits it.
-  authPromise.catch(() => {
-    authPromise = null;
-    authExpiresAt = 0;
-  });
+  authPromise.catch(resetAuth);
 
   return authPromise;
 }
@@ -105,6 +107,12 @@ async function withFixture<T>(
     await ensureAuth();
     return { ok: true, source: "live", data: await run(), latencyMs: latencyMs() };
   } catch (error) {
+    // Drop the memoised token on any live failure. Before it was memoised, every
+    // read re-authenticated and so self-healed from a token that died inside the
+    // window; the fixture ladder below rescues the request, not the stale cache,
+    // so without this one bad token means every read fails until the window
+    // rolls. Costs one extra login after a failed read.
+    resetAuth();
     if (!flags.allowFixtureFallback) {
       return {
         ok: false,
@@ -194,6 +202,68 @@ function practitionerIdsFrom(resource: Appointment | Encounter): string[] {
 // and cannot arise in `upcoming` — that list is filtered on having a date.
 const visitTime = (visit: VisitSummary) => (visit.date ? Date.parse(visit.date) : 0);
 
+// A cancelled appointment belongs in neither list. Out of Upcoming because it
+// would also reach the reschedule picker, letting the patient ask to move a visit
+// that no longer exists; out of Past because Past sorts date-descending, so a
+// cancelled future appointment would head the list of visits that happened.
+const DEAD_STATUSES = new Set(["cancelled", "noshow", "entered-in-error"]);
+
+/**
+ * Sorts a patient's appointments and encounters into upcoming and past. Pure and
+ * exported for the test — this bucketing has produced two disappearing-visit
+ * bugs, so it gets a check rather than only being exercised through a live read.
+ *
+ * Takes every encounter and applies the finished filter itself, rather than
+ * being handed a pre-filtered list: the rows and the de-dup set below must come
+ * from the same encounters, and that only holds if one place decides which ones.
+ */
+export function splitVisits(
+  appointmentRows: VisitSummary[],
+  encounters: Encounter[],
+  toRow: (encounter: Encounter) => VisitSummary,
+  now: number
+): Pick<VisitHistory, "upcoming" | "past"> {
+  const isUpcoming = (visit: VisitSummary) =>
+    visit.date !== null && Date.parse(visit.date) > now;
+  const isDead = (visit: VisitSummary) => DEAD_STATUSES.has(visit.status);
+
+  // Only finished encounters are a visit that happened. The planned pre-visit
+  // intake Encounter is this app's own artifact, not somewhere the patient went,
+  // so it appears in neither list — its practitioner still joins the care team.
+  const finished = encounters.filter((encounter) => encounter.status === "finished");
+  const encounterRows = finished.map(toRow);
+
+  // A completed visit exists as both an Appointment and the Encounter it
+  // produced, so a real chart would list it twice. Encounter.appointment is the
+  // link between them; the Encounter wins because it carries what actually
+  // happened.
+  //
+  // Built from `finished` — the encounters that actually produce rows. The
+  // seeded planned intake Encounter also references the upcoming appointment, so
+  // taking every encounter would suppress that appointment from Past the moment
+  // it stops being upcoming, with no Encounter row replacing it: the visit would
+  // vanish from the portal entirely.
+  const encounterAppointmentIds = new Set(
+    finished.flatMap((e) =>
+      (e.appointment ?? [])
+        .map((ref) => ref.reference?.split("/")[1])
+        .filter((id): id is string => Boolean(id))
+    )
+  );
+
+  return {
+    upcoming: appointmentRows
+      .filter((v) => isUpcoming(v) && !isDead(v))
+      .sort((a, b) => visitTime(a) - visitTime(b)),
+    past: [
+      ...appointmentRows.filter(
+        (v) => !isUpcoming(v) && !isDead(v) && !encounterAppointmentIds.has(v.fhirId)
+      ),
+      ...encounterRows,
+    ].sort((a, b) => visitTime(b) - visitTime(a)),
+  };
+}
+
 /**
  * The patient's visits and the clinicians on them. Deliberately separate from
  * `getPatientContext`, which runs on every intake turn — the agent does not
@@ -245,58 +315,21 @@ export async function getVisitHistory(
       };
     });
 
-    // Only finished encounters are a visit that happened. The planned pre-visit
-    // intake Encounter is this app's own artifact, not somewhere the patient
-    // went, so it appears in neither list — its practitioner still joins the
-    // care team below.
-    const encounterRows: VisitSummary[] = encounters
-      .filter((encounter) => encounter.status === "finished")
-      .map((encounter) => {
-        const practitionerFhirId = practitionerIdsFrom(encounter)[0] ?? null;
-        return {
-          fhirId: encounter.id ?? "",
-          resourceType: "Encounter" as const,
-          description: encounter.type?.[0]?.text ?? "Visit",
-          date: encounter.period?.start ?? null,
-          status: encounter.status ?? "unknown",
-          practitionerFhirId,
-          practitionerName: nameFor(practitionerFhirId),
-        };
-      });
-
-    const now = Date.now();
-    // Status as well as date: a cancelled appointment with a future start is not
-    // upcoming, and listing it would also offer it in the reschedule picker —
-    // letting the patient ask to move a visit that no longer exists.
-    const DEAD_STATUSES = new Set(["cancelled", "noshow", "entered-in-error"]);
-    const isUpcoming = (visit: VisitSummary) =>
-      visit.date !== null &&
-      Date.parse(visit.date) > now &&
-      !DEAD_STATUSES.has(visit.status);
-
-    // A completed visit exists as both an Appointment and the Encounter it
-    // produced, so a real chart would list it twice. Encounter.appointment is
-    // the link between them; the Encounter wins because it carries what actually
-    // happened. (The seed has one Appointment and it is in the future, so this
-    // changes nothing here — it matters the moment real data appears.)
-    const encounterAppointmentIds = new Set(
-      encounters.flatMap((e) =>
-        (e.appointment ?? [])
-          .map((ref) => ref.reference?.split("/")[1])
-          .filter((id): id is string => Boolean(id))
-      )
-    );
+    const encounterRow = (encounter: Encounter): VisitSummary => {
+      const practitionerFhirId = practitionerIdsFrom(encounter)[0] ?? null;
+      return {
+        fhirId: encounter.id ?? "",
+        resourceType: "Encounter",
+        description: encounter.type?.[0]?.text ?? "Visit",
+        date: encounter.period?.start ?? null,
+        status: encounter.status ?? "unknown",
+        practitionerFhirId,
+        practitionerName: nameFor(practitionerFhirId),
+      };
+    };
 
     return {
-      upcoming: appointmentRows
-        .filter(isUpcoming)
-        .sort((a, b) => visitTime(a) - visitTime(b)),
-      past: [
-        ...appointmentRows.filter(
-          (v) => !isUpcoming(v) && !encounterAppointmentIds.has(v.fhirId)
-        ),
-        ...encounterRows,
-      ].sort((a, b) => visitTime(b) - visitTime(a)),
+      ...splitVisits(appointmentRows, encounters, encounterRow, Date.now()),
       careTeam: practitioners.map((practitioner) => ({
         fhirId: practitioner.id ?? "",
         name: practitionerDisplayName(practitioner),
