@@ -35,6 +35,30 @@ export const VOICE_ENCODING = "linear16";
 export const VOICE_MODEL = "nova-3";
 export const VOICE_TTS_MODEL = "aura-2-thalia-en";
 
+// Aura's default pace is unhurried, which reads as sluggish when the reply is
+// one short question and the room is waiting for it. 1.4 keeps the prosody
+// intact — this is a rate multiplier on the model, not a resampled playback
+// speed, so nothing pitches up.
+//
+// Env-overridable because the right number is a listening judgement, not a
+// derivable one: it depends on the room, the PA, and how much of the reply the
+// audience is reading along with. Tune it without a redeploy.
+const DEFAULT_TTS_SPEED = 1.4;
+
+// Deepgram rejects values outside 0.5-2.0 with a 400, which on this path would
+// silence the agent entirely. A malformed or out-of-range override falls back to
+// the default rather than taking the demo down.
+function ttsSpeed(): number {
+  const raw = process.env.DEEPGRAM_TTS_SPEED;
+  if (!raw) return DEFAULT_TTS_SPEED;
+  const value = Number.parseFloat(raw);
+  if (!Number.isFinite(value) || value < 0.5 || value > 2) {
+    console.warn("[deepgram] ignoring out-of-range DEEPGRAM_TTS_SPEED", { raw });
+    return DEFAULT_TTS_SPEED;
+  }
+  return value;
+}
+
 // Nova-3 keyterm boosting. The whole demo turns on the clinician hearing
 // "lamotrigine" correctly, and these are the words a general model is least
 // sure about.
@@ -156,6 +180,7 @@ export async function synthesizeSpeech(text: string): Promise<ArrayBuffer> {
     text,
     model: VOICE_TTS_MODEL,
     encoding: "mp3",
+    speed: ttsSpeed(),
   });
   return audio.arrayBuffer();
 }
