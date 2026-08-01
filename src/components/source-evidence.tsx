@@ -15,7 +15,7 @@ export function SourceEvidence({
 }) {
   return (
     <Tooltip>
-      <TooltipTrigger className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600 hover:border-blue-400 hover:text-blue-700">
+      <TooltipTrigger className="rounded-full border border-border bg-white px-3 py-1 text-sm font-medium text-slate-600 hover:border-ring hover:text-primary">
         {label}
       </TooltipTrigger>
       <TooltipContent>

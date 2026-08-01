@@ -12,24 +12,30 @@ export default function PatientSummaryPage() {
   return (
     <main className="mx-auto flex max-w-2xl flex-col gap-6 p-8">
       <div>
-        <p className="text-sm font-medium text-blue-700">Your visit prep</p>
-        <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+        <p className="text-sm font-semibold tracking-[0.12em] text-primary uppercase">
+          Your visit prep
+        </p>
+        <h1 className="mt-1 text-3xl font-semibold tracking-tight text-slate-900">
           What we documented
         </h1>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">In plain language</CardTitle>
+          <CardTitle className="text-lg">In plain language</CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-sm text-slate-700">{draft.patientFriendlySummary}</p>
+          {/* The patient reads this one on a phone at arm's length; it is the
+              screen's whole payload, so it gets the largest body size. */}
+          <p className="text-lg leading-relaxed text-slate-700">
+            {draft.patientFriendlySummary}
+          </p>
         </CardContent>
       </Card>
 
       {draft.coverageSummary && <CoverageCard coverage={draft.coverageSummary} />}
 
-      <p className="text-xs text-muted-foreground">
+      <p className="text-sm text-muted-foreground">
         No diagnosis or treatment decision has been made. Your clinician will review
         this draft before your visit.
       </p>
