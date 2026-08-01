@@ -16,7 +16,14 @@ import type { ClinicalDraft, PatientContext, TranscriptEvent } from "@/types";
 // copy — those stay verbatim in orchestrator.ts and safety.ts.
 
 const QUESTION_TIMEOUT_MS = 8_000;
-const DRAFT_TIMEOUT_MS = 20_000;
+
+// The structured draft is a far bigger generation than a question — nine
+// fields, several of them arrays — and it is slow. Measured against the live
+// gateway on openai/gpt-5-nano: a valid draft came back in 26.7s. The previous
+// 20s budget was below that, so every draft attempt was killed by our own
+// timeout and the fallback fixture was served instead. The draft had literally
+// never succeeded in this app for that reason, independent of rate limiting.
+const DRAFT_TIMEOUT_MS = 40_000;
 
 // Doc section 7 rule 9 caps spoken replies at 35 words. Allow a small grace
 // margin, then fall back rather than speak a rambling line during the demo.
@@ -211,10 +218,18 @@ Produce the structured clinician draft. Requirements:
         issues: parsed.error.issues.slice(0, 3),
       });
     } catch (error) {
-      console.warn("[llm] draft generation threw", {
-        attempt: attempt + 1,
-        message: error instanceof Error ? error.message : String(error),
-      });
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn("[llm] draft generation threw", { attempt: attempt + 1, message });
+
+      // Retrying a timeout only buys a second timeout. The first attempt
+      // already proved the model needs longer than we are willing to wait, so
+      // a retry doubles the dead air on stage and changes nothing — a 20s
+      // budget turned into a 42s turn this way. Retry is for a malformed or
+      // transiently-failed response, not a slow one.
+      if (/timeout|aborted/i.test(message)) {
+        console.warn("[llm] draft timed out, not retrying — serving fixture");
+        return fixture;
+      }
     }
   }
 
