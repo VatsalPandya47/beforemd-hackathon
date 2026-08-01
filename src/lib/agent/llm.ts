@@ -30,7 +30,15 @@ import type { ClinicalDraft, PatientContext, TranscriptEvent } from "@/types";
 // looked hard-coded. Asking a question is not a reasoning task; "low" brings
 // it back to a couple of seconds, and the ceiling leaves room for a slow
 // gateway without stalling the conversation.
-const QUESTION_TIMEOUT_MS = 15_000;
+// 10s, not more: this sits in the voice path where the patient is waiting, and
+// silence is a failed demo whether or not an answer eventually arrives. At the
+// measured ~6.1s that covers the tail with the fallback picking up the rest.
+const QUESTION_TIMEOUT_MS = 10_000;
+
+// Coupled to an OpenAI model. providerOptions is namespaced per provider, so
+// pointing LLM_MODEL at a non-OpenAI model silently drops this and questions
+// run at default effort again — which is what made every call exceed its
+// timeout in the first place. Add the matching key if the model changes.
 const QUESTION_REASONING_EFFORT = "low";
 
 // The structured draft is a far bigger generation than a question — nine

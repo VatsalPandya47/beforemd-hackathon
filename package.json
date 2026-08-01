@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "seed:medplum": "node --env-file=.env.local scripts/seed-medplum.mjs",
-    "test:safety": "node --import tsx --test src/lib/agent/safety.test.ts",
+    "test:safety": "node --import tsx --test \"src/lib/agent/*.test.ts\"",
     "test:realtime": "node --import tsx --test src/lib/realtime/use-session-events.test.ts",
     "test:visits": "node --import tsx --test src/lib/integrations/visit-history.test.ts"
   },
