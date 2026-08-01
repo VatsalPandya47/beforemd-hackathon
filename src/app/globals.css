@@ -233,3 +233,16 @@
     animation-iteration-count: 1 !important;
   }
 }
+
+/* Landing page hero background only (src/app/page.tsx). A static gradient,
+   not an animation, so it does not fall under the motion policy above. Stays
+   in the blue/indigo family the rest of the app already uses (--primary is
+   the same hue, 265) rather than introducing red or magenta, which would read
+   as generic AI marketing rather than this product's clinical navy. */
+.bmd-hero-glow {
+  background-color: oklch(0.16 0.03 265);
+  background-image:
+    radial-gradient(55% 50% at 88% 12%, oklch(0.55 0.18 260 / 0.55), transparent 70%),
+    radial-gradient(50% 45% at 8% 88%, oklch(0.5 0.15 225 / 0.4), transparent 70%),
+    radial-gradient(40% 40% at 92% 92%, oklch(0.48 0.14 292 / 0.35), transparent 70%);
+}
