@@ -1,7 +1,14 @@
 import { MossClient } from "@inferedge/moss";
+import { env as transformersEnv } from "@huggingface/transformers";
 import { flags } from "@/lib/flags";
 import { demoPatientContext, demoRetrievedContext } from "@/lib/demo-fixtures";
 import type { PatientContext, RetrievedContext, ToolResult } from "@/types";
+
+// Vercel's function filesystem is read-only outside /tmp. transformers.js
+// defaults to caching downloaded model files inside its own package
+// directory (./.cache), which fails there with ENOENT on mkdir. Point it at
+// the one writable path instead.
+transformersEnv.cacheDir = "/tmp/transformers-cache/";
 
 // Moss does on-device semantic search: the index is built in their cloud, then
 // pulled down and queried locally (see docs/sponsor-notes.md). The management
