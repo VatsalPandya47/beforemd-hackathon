@@ -42,5 +42,5 @@ yarn-error.log*
 next-env.d.ts
 .gstack/
 
-# local agent guidance
-CLAUDE.md
+# local agent guidance (CLAUDE.md itself stays tracked — it just imports AGENTS.md)
+CLAUDE.local.md
